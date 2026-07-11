@@ -79,8 +79,8 @@ jobs:
       contents: write
 
     env:
-      SYNC_URL: https://github.com/OrangeFox16/sync.git
-      MANIFEST_BRANCH: "16.0"
+      SYNC_URL: https://gitlab.com/OrangeFox/sync.git
+      MANIFEST_BRANCH: "14.1"
       DEVICE_TREE_URL: ${{ inputs.device_tree_url }}
       DEVICE_TREE_BRANCH: ${{ inputs.device_tree_branch }}
       DEVICE_PATH: ${{ inputs.device_path }}
@@ -190,16 +190,6 @@ jobs:
         ./orangefox_sync.sh --branch ${{ env.MANIFEST_BRANCH }} --path ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-    - name: Replace vendor/recovery with latest
-      run: |
-        /tmp/send_msg.sh "🔁 Updating vendor/recovery..."
-        cd "${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}"
-        rm -rf vendor/recovery
-        git clone --depth=1 -b fox_16.0-R12 \
-          https://gitlab.com/OrangeFox/vendor/recovery.git \
-          vendor/recovery
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
     - name: Clone device tree
       run: |
         /tmp/send_msg.sh "🌲 Cloning device tree for \`${{ env.DEVICE_NAME }}\`..."
@@ -246,7 +236,7 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         set -e
-        lunch ${{ env.MAKEFILE_NAME }}-bp2a-eng
+        lunch ${{ env.MAKEFILE_NAME }}-ap2a-eng
         if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
           /tmp/send_msg.sh "❌ Build failed for \`${{ env.DEVICE_NAME }}\` (\`${{ env.MANIFEST_BRANCH }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           exit 1
@@ -359,11 +349,6 @@ jobs:
           git reset --hard "$NEW_COMMIT"
           CURRENT_COMMIT="$NEW_COMMIT"
           cd "$FOX_DIR"
-          rm -rf vendor/recovery
-          git clone --depth=1 -b fox_16.0-R12 \
-            https://gitlab.com/OrangeFox/vendor/recovery.git \
-            vendor/recovery
-          set +e
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           set -e
