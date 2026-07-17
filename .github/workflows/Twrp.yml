@@ -1,0 +1,230 @@
+name: Twrp Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_tree_url:
+        description: "Device tree repository URL"
+        required: true
+        type: string
+        default: ""
+
+      device_tree_branch:
+        description: "Device tree branch"
+        required: true
+        type: string
+        default: ""
+
+      device_path:
+        description: "Device path (ex: device/xiaomi/zorn)"
+        required: true
+        type: string
+        default: ""
+
+      device_name:
+        description: "Device codename (ex: zorn)"
+        required: true
+        type: string
+        default: ""
+
+      makefile_name:
+        description: "Makefile name (ex: twrp_zorn)"
+        required: true
+        type: string
+        default: ""
+
+      build_target:
+        description: "Build target"
+        required: true
+        type: choice
+        default: recovery
+        options:
+          - recovery
+          - boot
+          - vendorboot
+
+      dt_token:
+        description: "Personal Access Token (leave empty for public repos)"
+        required: false
+        type: string
+        default: ""
+
+      telegram_bot_token:
+        description: "Telegram Bot Token"
+        required: false
+        type: string
+        default: ""
+
+      telegram_chat_id:
+        description: "Telegram Chat ID"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  build:
+    if: github.event.repository.owner.id == github.event.sender.id
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+
+    env:
+      SYNC_URL: "https://github.com/TWRP-Test/platform_manifest_twrp_aosp.git"
+      MANIFEST_BRANCH: "twrp-16.0"
+      DEVICE_TREE_URL: ${{ inputs.device_tree_url }}
+      DEVICE_TREE_BRANCH: ${{ inputs.device_tree_branch }}
+      DEVICE_PATH: ${{ inputs.device_path }}
+      DEVICE_NAME: ${{ inputs.device_name }}
+      MAKEFILE_NAME: ${{ inputs.makefile_name }}
+      BUILD_TARGET: ${{ inputs.build_target }}
+      DT_TOKEN: ${{ inputs.dt_token }}
+      TG_BOT_TOKEN: ${{ inputs.telegram_bot_token }}
+      TG_CHAT_ID: ${{ inputs.telegram_chat_id }}
+
+    steps:
+    
+    - name: "Verify device tree access"
+      run: |
+        DT_URL="${{ env.DEVICE_TREE_URL }}"
+        ORIGINAL_URL="$DT_URL"
+        TOKEN="${{ env.DT_TOKEN }}"
+        
+        echo "=============================================="
+        echo " Testing device tree access..."
+        echo " Type   : TWRP-Test"
+        echo " URL    : https://***@github.com/${DT_URL#https://github.com/}"
+        echo " Branch : ${{ env.DEVICE_TREE_BRANCH }}"
+        echo "=============================================="
+        
+        if [ -n "$TOKEN" ]; then
+          if echo "$DT_URL" | grep -q "github.com"; then
+            REPO_PATH="${DT_URL#https://github.com/}"
+            DT_URL="https://oauth2:${TOKEN}@github.com/${REPO_PATH}"
+            echo "🔑 Token authenticated"
+          elif echo "$DT_URL" | grep -q "gitlab.com"; then
+            REPO_PATH="${DT_URL#https://gitlab.com/}"
+            DT_URL="https://oauth2:${TOKEN}@gitlab.com/${REPO_PATH}"
+            echo "🔑 Token authenticated"
+          fi
+        else
+          echo "ℹ️  No token — public access"
+        fi
+        
+        echo "AUTH_URL=$DT_URL" >> $GITHUB_ENV
+        echo "ORIGINAL_URL=$ORIGINAL_URL" >> $GITHUB_ENV
+        
+        if git ls-remote --exit-code "$DT_URL" 2>/dev/null; then
+          echo "✅ Device tree accessible!"
+        else
+          echo "❌ Cannot access device tree"
+          exit 1
+        fi
+
+    - name: Setup Telegram
+      run: |
+        if [ -n "${{ env.TG_BOT_TOKEN }}" ] && [ -n "${{ env.TG_CHAT_ID }}" ]; then
+          cat <<'EOF' > /tmp/send_msg.sh
+        #!/bin/bash
+        MSG="$(printf "$1")"
+        curl -s --fail \
+          -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
+          -d chat_id="${{ env.TG_CHAT_ID }}" \
+          -d text="$MSG" \
+          -d parse_mode="Markdown" \
+          -d disable_web_page_preview=true \
+        > /dev/null 2>&1 || true
+        EOF
+          chmod +x /tmp/send_msg.sh
+          echo "TELEGRAM_ENABLED=true" >> $GITHUB_ENV
+        else
+          echo '#!/bin/bash' > /tmp/send_msg.sh
+          echo 'exit 0' >> /tmp/send_msg.sh
+          chmod +x /tmp/send_msg.sh
+          echo "TELEGRAM_ENABLED=false" >> $GITHUB_ENV
+        fi
+
+    - name: Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
+
+    - name: Initialize workspace
+      run: |
+        /tmp/send_msg.sh "🚀 *TWRP-Test build* for \`${{ env.DEVICE_NAME }}\` (\`twrp-16.0\`)"
+        mkdir workspace
+        cd workspace
+        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+      id: pwd
+
+    - name: Prepare build environment
+      run: |
+        DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
+            linux-modules-extra-$(uname -r) \
+            git python3 tar aria2
+        curl -sL -O "https://gitlab.com/OrangeFox/misc/scripts/-/raw/master/setup/android_build_env.sh"
+        sudo bash android_build_env.sh
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Install OpenJDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '11'
+
+    - name: Sync sources
+      run: |
+        /tmp/send_msg.sh "🌐 Syncing TWRP-Test sources..."
+        cd ${{ steps.pwd.outputs.workspace-folder }}
+        mkdir twrp_test_16.0
+        cd twrp_test_16.0
+        repo init --depth=1 -u ${{ env.SYNC_URL }} -b ${{ env.MANIFEST_BRANCH }}
+        repo sync -j$(nproc --all)
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Clone device tree
+      run: |
+        cd "${{ steps.pwd.outputs.workspace-folder }}/twrp_test_16.0"
+        git clone --depth=1 "${{ env.AUTH_URL }}" -b "${{ env.DEVICE_TREE_BRANCH }}" "./${{ env.DEVICE_PATH }}"
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Get device tree commit
+      id: devtree_commit
+      run: |
+        cd ${{ steps.pwd.outputs.workspace-folder }}/twrp_test_16.0/${{ env.DEVICE_PATH }}
+        LATEST_COMMIT=$(git rev-parse --short=7 HEAD)
+        echo "LATEST_COMMIT=$LATEST_COMMIT" >> $GITHUB_OUTPUT
+        DISPLAY_URL=$(echo "${{ env.ORIGINAL_URL }}" | sed 's|https://oauth2:[^@]*@|https://|')
+        /tmp/send_msg.sh "🌲 Device tree: [${LATEST_COMMIT}](${DISPLAY_URL}/tree/$LATEST_COMMIT)"
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 40
+
+    - name: Build recovery
+      run: |
+        cd "${{ steps.pwd.outputs.workspace-folder }}/twrp_test_16.0"
+        set +e
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        set -e
+        lunch ${{ env.MAKEFILE_NAME }}-bp2a-eng
+        mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all) || {
+          /tmp/send_msg.sh "❌ Build failed"
+          exit 1
+        }
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: TWRP-Test-${{ env.DEVICE_NAME }}
+        path: |
+          ${{ steps.pwd.outputs.workspace-folder }}/twrp_test_16.0/out/target/product/${{ env.DEVICE_NAME }}/recovery.img
+          ${{ steps.pwd.outputs.workspace-folder }}/twrp_test_16.0/out/target/product/${{ env.DEVICE_NAME }}/*.zip
+        retention-days: 90
+
+    - name: Notify Complete
+      if: success()
+      run: |
+        /tmp/send_msg.sh "📦 *TWRP-Test build complete!*"
