@@ -95,31 +95,6 @@ jobs:
       WATCH_INTERVAL_SECONDS: 600
 
     steps:
-    
-    - name: Verify device tree access
-      run: |
-        DT_URL="${{ env.DEVICE_TREE_URL }}"
-        ORIGINAL_URL="$DT_URL"
-        TOKEN="${{ env.DT_TOKEN }}"
-        
-        if [ -n "$TOKEN" ]; then
-          echo "::add-mask::$TOKEN"
-          if echo "$DT_URL" | grep -q "github.com"; then
-            DT_URL=$(echo "$DT_URL" | sed "s|https://github.com/|https://oauth2:${TOKEN}@github.com/|")
-          elif echo "$DT_URL" | grep -q "gitlab.com"; then
-            DT_URL=$(echo "$DT_URL" | sed "s|https://gitlab.com/|https://oauth2:${TOKEN}@gitlab.com/|")
-          fi
-        fi
-        
-        echo "AUTH_URL=$DT_URL" >> $GITHUB_ENV
-        echo "ORIGINAL_URL=$ORIGINAL_URL" >> $GITHUB_ENV
-        
-        if git ls-remote --exit-code "$DT_URL" 2>/devnull; then
-          echo "Device tree accessible. Continuing build..."
-        else
-          echo "FATAL: Cannot access device tree."
-          exit 1
-        fi
 
     - name: Setup Advanced Telegram Dashboard Engine
       run: |
@@ -249,6 +224,31 @@ jobs:
         chmod +x /tmp/notify.py
         python3 /tmp/notify.py 5 1 init
 
+    - name: Verify device tree access
+      run: |
+        DT_URL="${{ env.DEVICE_TREE_URL }}"
+        ORIGINAL_URL="$DT_URL"
+        TOKEN="${{ env.DT_TOKEN }}"
+        
+        if [ -n "$TOKEN" ]; then
+          echo "::add-mask::$TOKEN"
+          if echo "$DT_URL" | grep -q "github.com"; then
+            DT_URL=$(echo "$DT_URL" | sed "s|https://github.com/|https://oauth2:${TOKEN}@github.com/|")
+          elif echo "$DT_URL" | grep -q "gitlab.com"; then
+            DT_URL=$(echo "$DT_URL" | sed "s|https://gitlab.com/|https://oauth2:${TOKEN}@gitlab.com/|")
+          fi
+        fi
+        
+        echo "AUTH_URL=$DT_URL" >> $GITHUB_ENV
+        echo "ORIGINAL_URL=$ORIGINAL_URL" >> $GITHUB_ENV
+        
+        if git ls-remote --exit-code "$DT_URL" 2>/dev/null; then
+          echo "Device tree accessible. Continuing build..."
+        else
+          echo "FATAL: Cannot access device tree."
+          exit 1
+        fi
+
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
 
@@ -330,7 +330,7 @@ jobs:
     - name: Notify Build Failure
       if: failure()
       run: |
-        python3 /tmp/notify.py 60 5 update failed
+        [ -f /tmp/notify.py ] && python3 /tmp/notify.py 60 5 update failed
         exit 1
 
     - name: Prepare build output paths
