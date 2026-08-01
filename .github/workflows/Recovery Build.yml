@@ -267,13 +267,32 @@ jobs:
         echo "Output files:"
         ls -la "${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/"
 
+    - name: Prepare build output paths
+      id: prepare_outputs
+      run: |
+        OUT_DIR="${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}"
+        
+        if [ "${{ env.BUILD_TARGET }}" = "vendorboot" ]; then
+          IMG_NAME="vendor_boot.img"
+        elif [ "${{ env.BUILD_TARGET }}" = "boot" ]; then
+          IMG_NAME="boot.img"
+        else
+          IMG_NAME="recovery.img"
+        fi
+        
+        IMG_PATH="$OUT_DIR/$IMG_NAME"
+        ZIP_PATH=$(ls $OUT_DIR/OrangeFox-R*.zip 2>/dev/null | head -n 1 || true)
+        
+        echo "IMG_PATH=$IMG_PATH" >> $GITHUB_ENV
+        echo "ZIP_PATH=$ZIP_PATH" >> $GITHUB_ENV
+
     - name: Upload to Release
       if: ${{ env.CREATE_RELEASE == 'Yes — Create Release (public)' }}
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/recovery.img
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.zip
+          ${{ env.IMG_PATH }}
+          ${{ env.ZIP_PATH }}
         name: ${{ env.DEVICE_NAME }}-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
         body: |
@@ -290,14 +309,20 @@ jobs:
         RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${{ github.run_id }}"
         /tmp/send_msg.sh "📦 *Build complete!*\n🔗 [Download]($RELEASE_URL)"
 
-    - name: Upload as Artifact (private)
+    - name: Upload Image Artifact (private)
       if: ${{ env.CREATE_RELEASE != 'Yes — Create Release (public)' }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.DEVICE_NAME }}-recovery
-        path: |
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/recovery.img
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.zip
+        name: ${{ env.DEVICE_NAME }}-${{ env.BUILD_TARGET }}-img
+        path: ${{ env.IMG_PATH }}
+        retention-days: 90
+
+    - name: Upload Installer Zip Artifact (private)
+      if: ${{ env.CREATE_RELEASE != 'Yes — Create Release (public)' && env.ZIP_PATH != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.DEVICE_NAME }}-installer-zip
+        path: ${{ env.ZIP_PATH }}
         retention-days: 90
 
     - name: Notify Build Complete
@@ -306,7 +331,7 @@ jobs:
         if [ "${{ env.CREATE_RELEASE }}" = "Yes — Create Release (public)" ]; then
           /tmp/send_msg.sh "📦 *Build complete!* Check the Release tab."
         else
-          /tmp/send_msg.sh "📦 *Build complete!* Artifact available in Actions tab (private, expires in 90 days)."
+          /tmp/send_msg.sh "📦 *Build complete!* Artifacts available in Actions tab (private, expires in 90 days)."
         fi
 
     - name: Watch for device tree changes and dirty build
@@ -358,12 +383,23 @@ jobs:
             /tmp/send_msg.sh "❌ Dirty build #${BUILD_COUNT} failed at commit \`${NEW_COMMIT_SHORT}\`. I will keep watching for another device tree change."
             continue
           fi
+          
+          if [ "${{ env.BUILD_TARGET }}" = "vendorboot" ]; then
+            IMG_NAME="vendor_boot.img"
+          elif [ "${{ env.BUILD_TARGET }}" = "boot" ]; then
+            IMG_NAME="boot.img"
+          else
+            IMG_NAME="recovery.img"
+          fi
+          
+          ZIP_FILE=$(ls "$OUT_DIR"/OrangeFox-R*.zip 2>/dev/null | head -n 1 || true)
+          
           TAG_NAME="${{ github.run_id }}-${BUILD_COUNT}"
           RELEASE_NAME="${{ env.DEVICE_NAME }}-${TAG_NAME}"
           /tmp/send_msg.sh "📦 Uploading dirty build #${BUILD_COUNT}..."
           gh release create "$TAG_NAME" \
-            "$OUT_DIR/recovery.img" \
-            "$OUT_DIR"/OrangeFox-R*.zip \
+            "$OUT_DIR/$IMG_NAME" \
+            $ZIP_FILE \
             --title "$RELEASE_NAME" \
             --notes "Manifest: ${{ env.MANIFEST_BRANCH }}
         Device: ${{ env.DEVICE_NAME }}
@@ -374,3 +410,4 @@ jobs:
           RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG_NAME}"
           /tmp/send_msg.sh "📦 *Dirty build #${BUILD_COUNT} complete!*\n🔗 [Download]($RELEASE_URL)\n🌲 Device tree commit: [${NEW_COMMIT_SHORT}](${{ env.ORIGINAL_URL }}/tree/${NEW_COMMIT_SHORT})"
         done
+        
