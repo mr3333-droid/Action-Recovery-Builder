@@ -372,10 +372,16 @@ jobs:
         elif [ "${{ env.BUILD_TARGET }}" = "boot" ]; then
           IMG_NAME="boot.img"
         else
-          IMG_NAME="recovery.img"
+          IMG_NAME="twrp-16.0-${{ env.DEVICE_NAME }}.img"
         fi
         
         IMG_PATH="$OUT_DIR/$IMG_NAME"
+        
+        # Renameia o recovery.img original
+        if [ -f "$OUT_DIR/recovery.img" ]; then
+          cp "$OUT_DIR/recovery.img" "$IMG_PATH"
+        fi
+        
         ZIP_PATH=$(ls $OUT_DIR/*.zip 2>/dev/null | head -n 1 || true)
         
         echo "IMG_PATH=$IMG_PATH" >> $GITHUB_ENV
