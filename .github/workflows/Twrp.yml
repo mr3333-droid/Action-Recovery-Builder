@@ -7,7 +7,7 @@ on:
         description: "Device tree repository URL"
         required: true
         type: string
-        default: "https://github.com/mr3333-droid/twrp_device_xiaomi_zorn"
+        default: ""
 
       device_tree_branch:
         description: "Device tree branch"
@@ -170,13 +170,13 @@ jobs:
         run_url = f"https://github.com/{repo}/actions/runs/{run_id}"
 
         steps = [
-            "1. Server Setup & Dependencies",
+            "1. Server Setup",
             "2. Source Code Sync",
             "3. Device Tree Clone",
             "4. Target Environment Setup",
-            "5. Recovery Compilation (mka)",
+            "5. Compilation",
             "6. Artifact Output Check",
-            "7. Release & Artifact Upload"
+            "7. Release"
         ]
 
         steps_text = ""
