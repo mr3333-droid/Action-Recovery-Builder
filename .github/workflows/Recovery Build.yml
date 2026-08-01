@@ -380,49 +380,62 @@ jobs:
         echo "IMG_PATH=$IMG_PATH" >> $GITHUB_ENV
         echo "ZIP_PATH=$ZIP_PATH" >> $GITHUB_ENV
 
-    - name: Upload to ZincDrive and send links to Telegram
+    - name: Upload to ZincDrive via S3 and send links to Telegram
       if: success() && env.ZINCDRIVE_API_KEY != ''
       run: |
         FOLDER_NAME="${{ env.ZINCDRIVE_FOLDER }}"
+        API_BASE="https://zincdrive.com/api/v1"
         
-        FOLDER_ID=$(curl -s -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
-          "https://zincdrive.com/api/folders" | \
-          jq -r ".data[] | select(.name==\"$FOLDER_NAME\") | .id" | head -n 1)
-        
-        if [ -z "$FOLDER_ID" ]; then
-          if [ "$FOLDER_NAME" = "zorn-stable" ]; then
-            FOLDER_TYPE="public"
-          elif [ "$FOLDER_NAME" = "zorn-experimental" ]; then
-            FOLDER_TYPE="private"
-          else
-            FOLDER_TYPE="unlisted"
-          fi
-          
-          FOLDER_RESPONSE=$(curl -s -X POST "https://zincdrive.com/api/folder/create" \
-            -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"name\":\"$FOLDER_NAME\",\"type\":\"$FOLDER_TYPE\"}")
-          FOLDER_ID=$(echo "$FOLDER_RESPONSE" | jq -r '.data.id')
+        if [ "$FOLDER_NAME" = "zorn-stable" ]; then
+          VISIBILITY=1
+        elif [ "$FOLDER_NAME" = "zorn-experimental" ]; then
+          VISIBILITY=0
+        else
+          VISIBILITY=2
         fi
         
-        IMG_RESPONSE=$(curl -s -X POST "https://zincdrive.com/api/upload" \
-          -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
-          -F "file=@${{ env.IMG_PATH }}" \
-          -F "folder_id=$FOLDER_ID")
-        IMG_LINK=$(echo "$IMG_RESPONSE" | jq -r '.data.url // empty')
+        upload_to_zinc() {
+          local FILE_PATH="$1"
+          local FILE_NAME="$2"
+          
+          local SIGN_RESPONSE=$(curl -s -X POST \
+            -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
+            -d "filename=${FILE_NAME}" \
+            "${API_BASE}/s3/sign")
+          
+          local UPLOAD_URL=$(echo "$SIGN_RESPONSE" | jq -r '.url')
+          local KEY=$(echo "$SIGN_RESPONSE" | jq -r '.key')
+          
+          if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
+            echo ""
+            return
+          fi
+          
+          curl -s -X PUT -H "Content-Type: application/octet-stream" \
+            --data-binary "@${FILE_PATH}" "$UPLOAD_URL"
+          
+          local SIZE=$(stat -c%s "$FILE_PATH")
+          local CONFIRM_DATA="key=${KEY}&filename=${FILE_NAME}&size=${SIZE}&visibility=${VISIBILITY}"
+          
+          local CONFIRM_RESPONSE=$(curl -s -X POST \
+            -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
+            -d "$CONFIRM_DATA" \
+            "${API_BASE}/s3/confirm")
+          
+          echo "$CONFIRM_RESPONSE" | jq -r '.download_link // empty'
+        }
+        
+        IMG_NAME=$(basename "${{ env.IMG_PATH }}")
+        IMG_LINK=$(upload_to_zinc "${{ env.IMG_PATH }}" "$IMG_NAME")
         
         ZIP_LINK=""
         if [ -f "${{ env.ZIP_PATH }}" ]; then
-          ZIP_RESPONSE=$(curl -s -X POST "https://zincdrive.com/api/upload" \
-            -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
-            -F "file=@${{ env.ZIP_PATH }}" \
-            -F "folder_id=$FOLDER_ID")
-          ZIP_LINK=$(echo "$ZIP_RESPONSE" | jq -r '.data.url // empty')
+          ZIP_NAME=$(basename "${{ env.ZIP_PATH }}")
+          ZIP_LINK=$(upload_to_zinc "${{ env.ZIP_PATH }}" "$ZIP_NAME")
         fi
         
-        FOLDER_LINK="https://zincdrive.com/folder/$FOLDER_ID"
         MSG="📦 *Download Links for ${{ env.DEVICE_NAME }}:*"
-        MSG="${MSG} %0A📂 *Folder:* ${FOLDER_LINK}"
+        MSG="${MSG} %0A📂 *Folder:* ${FOLDER_NAME}"
         
         if [ -n "$IMG_LINK" ]; then
           MSG="${MSG} %0A🔗 IMG: ${IMG_LINK}"
@@ -444,7 +457,6 @@ jobs:
         
         echo "IMG_LINK=$IMG_LINK" >> $GITHUB_ENV
         echo "ZIP_LINK=$ZIP_LINK" >> $GITHUB_ENV
-        echo "FOLDER_LINK=$FOLDER_LINK" >> $GITHUB_ENV
 
     - name: Upload to Release
       if: ${{ env.CREATE_RELEASE == 'Yes — Create Release (public)' }}
@@ -462,7 +474,6 @@ jobs:
           Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}](${{ env.ORIGINAL_URL }}/tree/${{ steps.devtree_commit.outputs.LATEST_COMMIT }})
           
           ## 📥 Direct Download Links
-          📂 Folder: ${{ env.FOLDER_LINK }}
           ${{ env.IMG_LINK && format('🔗 IMG: {0}', env.IMG_LINK) || '' }}
           ${{ env.ZIP_LINK && format('🔗 ZIP: {0}', env.ZIP_LINK) || '' }}
       env:
@@ -508,6 +519,32 @@ jobs:
         DEVICE_DIR="$FOX_DIR/${{ env.DEVICE_PATH }}"
         OUT_DIR="$FOX_DIR/out/target/product/${{ env.DEVICE_NAME }}"
         
+        upload_dirty_to_zinc() {
+          local FILE_PATH="$1"
+          local FILE_NAME="$2"
+          
+          local SIGN_RESPONSE=$(curl -s -X POST \
+            -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
+            -d "filename=${FILE_NAME}" \
+            "https://zincdrive.com/api/v1/s3/sign")
+          
+          local UPLOAD_URL=$(echo "$SIGN_RESPONSE" | jq -r '.url')
+          local KEY=$(echo "$SIGN_RESPONSE" | jq -r '.key')
+          
+          if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
+            return
+          fi
+          
+          curl -s -X PUT -H "Content-Type: application/octet-stream" \
+            --data-binary "@${FILE_PATH}" "$UPLOAD_URL"
+          
+          local SIZE=$(stat -c%s "$FILE_PATH")
+          curl -s -X POST \
+            -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
+            -d "key=${KEY}&filename=${FILE_NAME}&size=${SIZE}&visibility=2" \
+            "https://zincdrive.com/api/v1/s3/confirm" 2>/dev/null
+        }
+        
         while true; do
           NOW=$(date +%s)
           ELAPSED=$((NOW - START_TIME))
@@ -541,8 +578,8 @@ jobs:
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           set -e
-          lunch ${{ env.MAKEFILE_NAME }}-ap2a
-
+          lunch ${{ env.MAKEFILE_NAME }}-ap2a-eng
+          
           if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
             python3 /tmp/notify.py 50 5 update failed
             continue
@@ -559,29 +596,11 @@ jobs:
           ZIP_FILE=$(ls "$OUT_DIR"/OrangeFox-R*.zip 2>/dev/null | head -n 1 || true)
           
           if [ -n "${{ env.ZINCDRIVE_API_KEY }}" ]; then
-            FOLDER_NAME="zorn-nightly"
-            FOLDER_ID=$(curl -s -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
-              "https://zincdrive.com/api/folders" | \
-              jq -r ".data[] | select(.name==\"$FOLDER_NAME\") | .id" | head -n 1)
-            
-            if [ -z "$FOLDER_ID" ]; then
-              FOLDER_RESPONSE=$(curl -s -X POST "https://zincdrive.com/api/folder/create" \
-                -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
-                -H "Content-Type: application/json" \
-                -d "{\"name\":\"$FOLDER_NAME\",\"type\":\"unlisted\"}")
-              FOLDER_ID=$(echo "$FOLDER_RESPONSE" | jq -r '.data.id')
-            fi
-            
-            curl -s -X POST "https://zincdrive.com/api/upload" \
-              -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
-              -F "file=@$OUT_DIR/$IMG_NAME" \
-              -F "folder_id=$FOLDER_ID" 2>/dev/null
+            upload_dirty_to_zinc "$OUT_DIR/$IMG_NAME" "$IMG_NAME"
             
             if [ -n "$ZIP_FILE" ]; then
-              curl -s -X POST "https://zincdrive.com/api/upload" \
-                -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
-                -F "file=@$ZIP_FILE" \
-                -F "folder_id=$FOLDER_ID" 2>/dev/null
+              ZIP_NAME=$(basename "$ZIP_FILE")
+              upload_dirty_to_zinc "$ZIP_FILE" "$ZIP_NAME"
             fi
           fi
           
@@ -601,3 +620,4 @@ jobs:
           
           python3 /tmp/notify.py 100 7 update
         done
+      
