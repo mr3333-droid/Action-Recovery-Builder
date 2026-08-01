@@ -61,6 +61,12 @@ on:
         type: string
         default: ""
 
+      zincdrive_api_key:
+        description: "ZincDrive API Key (leave empty to disable)"
+        required: false
+        type: string
+        default: ""
+
       create_release:
         description: "Create public GitHub Release?"
         required: true
@@ -90,6 +96,7 @@ jobs:
       DT_TOKEN: ${{ inputs.dt_token }}
       TG_BOT_TOKEN: ${{ inputs.telegram_bot_token }}
       TG_CHAT_ID: ${{ inputs.telegram_chat_id }}
+      ZINCDRIVE_API_KEY: ${{ inputs.zincdrive_api_key }}
       CREATE_RELEASE: ${{ inputs.create_release }}
       WATCH_UNTIL_SECONDS: 20700
       WATCH_INTERVAL_SECONDS: 600
@@ -100,6 +107,9 @@ jobs:
       run: |
         if [ -n "${{ env.TG_BOT_TOKEN }}" ]; then
           echo "::add-mask::${{ env.TG_BOT_TOKEN }}"
+        fi
+        if [ -n "${{ env.ZINCDRIVE_API_KEY }}" ]; then
+          echo "::add-mask::${{ env.ZINCDRIVE_API_KEY }}"
         fi
         echo $(date +%s) > /tmp/build_start_time
 
@@ -358,6 +368,50 @@ jobs:
         echo "IMG_PATH=$IMG_PATH" >> $GITHUB_ENV
         echo "ZIP_PATH=$ZIP_PATH" >> $GITHUB_ENV
 
+    - name: Upload to ZincDrive and send links to Telegram
+      if: success() && env.ZINCDRIVE_API_KEY != ''
+      run: |
+        # Upload .img
+        IMG_RESPONSE=$(curl -X POST "https://zincdrive.com/api/upload" \
+          -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
+          -F "file=@${{ env.IMG_PATH }}")
+        IMG_LINK=$(echo "$IMG_RESPONSE" | jq -r '.data.url // empty')
+        
+        # Upload .zip (if exists)
+        ZIP_LINK=""
+        if [ -f "${{ env.ZIP_PATH }}" ]; then
+          ZIP_RESPONSE=$(curl -X POST "https://zincdrive.com/api/upload" \
+            -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
+            -F "file=@${{ env.ZIP_PATH }}")
+          ZIP_LINK=$(echo "$ZIP_RESPONSE" | jq -r '.data.url // empty')
+        fi
+        
+        # Build message
+        MSG="📦 *Download Links for ${{ env.DEVICE_NAME }}:*"
+        
+        if [ -n "$IMG_LINK" ]; then
+          MSG="${MSG} %0A🔗 IMG: ${IMG_LINK}"
+        fi
+        
+        if [ -n "$ZIP_LINK" ]; then
+          MSG="${MSG} %0A🔗 ZIP: ${ZIP_LINK}"
+        fi
+        
+        if [ -z "$IMG_LINK" ] && [ -z "$ZIP_LINK" ]; then
+          MSG="${MSG} %0A⚠️ Upload to ZincDrive failed. Check workflow logs."
+        fi
+        
+        # Send to Telegram
+        curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
+          -d chat_id="${{ env.TG_CHAT_ID }}" \
+          -d text="$MSG" \
+          -d parse_mode="Markdown" \
+          -d disable_web_page_preview=true
+        
+        # Save links for release notes
+        echo "IMG_LINK=$IMG_LINK" >> $GITHUB_ENV
+        echo "ZIP_LINK=$ZIP_LINK" >> $GITHUB_ENV
+
     - name: Upload to Release
       if: ${{ env.CREATE_RELEASE == 'Yes — Create Release (public)' }}
       uses: softprops/action-gh-release@v2
@@ -372,6 +426,10 @@ jobs:
           Device: ${{ env.DEVICE_NAME }}
           Target: ${{ env.BUILD_TARGET }}
           Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}](${{ env.ORIGINAL_URL }}/tree/${{ steps.devtree_commit.outputs.LATEST_COMMIT }})
+          
+          ## 📥 Direct Download Links
+          ${{ env.IMG_LINK && format('🔗 IMG: {0}', env.IMG_LINK) || '' }}
+          ${{ env.ZIP_LINK && format('🔗 ZIP: {0}', env.ZIP_LINK) || '' }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -465,19 +523,22 @@ jobs:
           
           ZIP_FILE=$(ls "$OUT_DIR"/OrangeFox-R*.zip 2>/dev/null | head -n 1 || true)
           
+          # Upload to ZincDrive for dirty builds too
+          if [ -n "${{ env.ZINCDRIVE_API_KEY }}" ]; then
+            curl -X POST "https://zincdrive.com/api/upload" \
+              -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
+              -F "file=@$OUT_DIR/$IMG_NAME" 2>/dev/null
+            
+            if [ -n "$ZIP_FILE" ]; then
+              curl -X POST "https://zincdrive.com/api/upload" \
+                -H "Authorization: Bearer ${{ env.ZINCDRIVE_API_KEY }}" \
+                -F "file=@$ZIP_FILE" 2>/dev/null
+            fi
+          fi
+          
           if [ "${{ env.CREATE_RELEASE }}" = "Yes — Create Release (public)" ]; then
             TAG_NAME="${{ github.run_id }}-${BUILD_COUNT}"
             RELEASE_NAME="${{ env.DEVICE_NAME }}-${TAG_NAME}"
             
             gh release create "$TAG_NAME" \
-              "$OUT_DIR/$IMG_NAME" \
-              $ZIP_FILE \
-              --title "$RELEASE_NAME" \
-              --notes "Dirty build: #${BUILD_COUNT}"
-              
-            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG_NAME}"
-            echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
-          fi
-          
-          python3 /tmp/notify.py 100 7 update
-        done
+              "$OUT_DIR/$IM
