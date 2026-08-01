@@ -302,7 +302,11 @@ jobs:
         echo "LATEST_COMMIT_FULL=$LATEST_COMMIT_FULL" >> $GITHUB_OUTPUT
         
         DISPLAY_URL=$(echo "${{ env.ORIGINAL_URL }}" | sed 's|https://oauth2:[^@]*@|https://|')
-        COMMIT_URL="${DISPLAY_URL}/tree/${LATEST_COMMIT}"
+        if echo "$DISPLAY_URL" | grep -q "gitlab.com"; then
+          COMMIT_URL="${DISPLAY_URL}/-/tree/${LATEST_COMMIT}"
+        else
+          COMMIT_URL="${DISPLAY_URL}/tree/${LATEST_COMMIT}"
+        fi
         
         echo "LATEST_COMMIT=$LATEST_COMMIT" >> $GITHUB_ENV
         echo "COMMIT_URL=$COMMIT_URL" >> $GITHUB_ENV
@@ -444,7 +448,7 @@ jobs:
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           set -e
-          lunch ${{ env.MAKEFILE_NAME }}-bp2a-eng
+          lunch ${{ env.MAKEFILE_NAME }}-ap2a-eng
           
           if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
             python3 /tmp/notify.py 50 5 update failed
@@ -460,17 +464,20 @@ jobs:
           fi
           
           ZIP_FILE=$(ls "$OUT_DIR"/OrangeFox-R*.zip 2>/dev/null | head -n 1 || true)
-          TAG_NAME="${{ github.run_id }}-${BUILD_COUNT}"
-          RELEASE_NAME="${{ env.DEVICE_NAME }}-${TAG_NAME}"
           
-          gh release create "$TAG_NAME" \
-            "$OUT_DIR/$IMG_NAME" \
-            $ZIP_FILE \
-            --title "$RELEASE_NAME" \
-            --notes "Dirty build: #${BUILD_COUNT}"
+          if [ "${{ env.CREATE_RELEASE }}" = "Yes — Create Release (public)" ]; then
+            TAG_NAME="${{ github.run_id }}-${BUILD_COUNT}"
+            RELEASE_NAME="${{ env.DEVICE_NAME }}-${TAG_NAME}"
             
-          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG_NAME}"
-          echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
+            gh release create "$TAG_NAME" \
+              "$OUT_DIR/$IMG_NAME" \
+              $ZIP_FILE \
+              --title "$RELEASE_NAME" \
+              --notes "Dirty build: #${BUILD_COUNT}"
+              
+            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG_NAME}"
+            echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
+          fi
           
           python3 /tmp/notify.py 100 7 update
         done
