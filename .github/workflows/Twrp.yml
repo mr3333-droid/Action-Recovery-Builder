@@ -377,7 +377,6 @@ jobs:
         
         IMG_PATH="$OUT_DIR/$IMG_NAME"
         
-        # Renameia o recovery.img original
         if [ -f "$OUT_DIR/recovery.img" ]; then
           cp "$OUT_DIR/recovery.img" "$IMG_PATH"
         fi
