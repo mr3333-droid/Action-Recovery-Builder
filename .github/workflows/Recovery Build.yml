@@ -13,25 +13,25 @@ on:
         description: "Device tree branch"
         required: true
         type: string
-        default: ""
+        default: "main"
 
       device_path:
         description: "Device path (ex: device/xiaomi/zorn)"
         required: true
         type: string
-        default: ""
+        default: "device/xiaomi/zorn"
 
       device_name:
         description: "Device codename (ex: zorn)"
         required: true
         type: string
-        default: ""
+        default: "zorn"
 
       makefile_name:
         description: "Makefile name (ex: twrp_zorn)"
         required: true
         type: string
-        default: ""
+        default: "twrp_zorn"
 
       build_target:
         description: "Build target"
