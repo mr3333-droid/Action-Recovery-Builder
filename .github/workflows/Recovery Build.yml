@@ -103,7 +103,7 @@ jobs:
         fi
         echo $(date +%s) > /tmp/build_start_time
 
-        cat <<'EOF' | sed 's/^        //' > /tmp/notify.py
+        python3 -c "import sys, textwrap; open('/tmp/notify.py', 'w').write(textwrap.dedent(sys.stdin.read()))" <<'EOF'
         import os, sys, time, json, urllib.request, urllib.parse
 
         token = os.getenv("TG_BOT_TOKEN")
@@ -181,17 +181,17 @@ jobs:
             footer = f"🔗 [View Workflow Run on GitHub]({run_url})"
 
         text = f"""{header}
-        ─────────────────────────────
-        📱 *Device:* `{device}`
-        🌿 *Manifest:* `{branch}` | *Target:* `{target}`
-        🌲 *Commit Tree:* {commit_text}
-        ─────────────────────────────
-        📊 *Progress:* `[{bar}]` *{percent}%*
-        ⏱ *Elapsed:* `{elapsed_str}` | ⌛ *Remaining:* `{rem_str}`
-        ─────────────────────────────
-        📌 *BUILD STEPS:*
-        {steps_text}─────────────────────────────
-        {footer}"""
+─────────────────────────────
+📱 *Device:* `{device}`
+🌿 *Manifest:* `{branch}` | *Target:* `{target}`
+🌲 *Commit Tree:* {commit_text}
+─────────────────────────────
+📊 *Progress:* `[{bar}]` *{percent}%*
+⏱ *Elapsed:* `{elapsed_str}` | ⌛ *Remaining:* `{rem_str}`
+─────────────────────────────
+📌 *BUILD STEPS:*
+{steps_text}─────────────────────────────
+{footer}"""
 
         if mode == "init":
             url = f"https://api.telegram.org/bot{token}/sendMessage"
