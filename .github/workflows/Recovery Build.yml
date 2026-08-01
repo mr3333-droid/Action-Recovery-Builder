@@ -7,7 +7,7 @@ on:
         description: "Device tree repository URL (GitHub or GitLab)"
         required: true
         type: string
-        default: "https://github.com/mr3333-droid/ofox_device_xiaomi_zorn"
+        default: ""
 
       device_tree_branch:
         description: "Device tree branch"
@@ -405,12 +405,26 @@ jobs:
       if: success()
       run: |
         if [ "${{ env.CREATE_RELEASE }}" = "Yes — Create Release (public)" ]; then
-          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_RUN_ID}" >> $GITHUB_ENV
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${{ github.run_id }}"
+          echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
+          
+          python3 /tmp/notify.py 100 7 update
+          
+          MSG="📦 *Download Links for ${{ env.DEVICE_NAME }}:*"
+          MSG="${MSG} %0A🔗 Release: ${RELEASE_URL}"
+          MSG="${MSG} %0A📱 Device: \`${{ env.DEVICE_NAME }}\`"
+          MSG="${MSG} %0A🌿 Branch: \`${{ env.MANIFEST_BRANCH }}\`"
+          MSG="${MSG} %0A🎯 Target: \`${{ env.BUILD_TARGET }}\`"
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ env.TG_CHAT_ID }}" \
+            -d text="$MSG" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true
         else
-          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> $GITHUB_ENV
+          echo "RELEASE_URL=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_ENV
+          python3 /tmp/notify.py 100 7 update
         fi
-        
-        python3 /tmp/notify.py 100 7 update
 
     - name: Watch for device tree changes and dirty build
       if: success()
@@ -487,6 +501,16 @@ jobs:
               
             RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG_NAME}"
             echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
+            
+            MSG="🔄 *Dirty Build #${BUILD_COUNT} for ${{ env.DEVICE_NAME }}:*"
+            MSG="${MSG} %0A🔗 Release: ${RELEASE_URL}"
+            MSG="${MSG} %0A🌲 Commit: \`${NEW_COMMIT_SHORT}\`"
+            
+            curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ env.TG_CHAT_ID }}" \
+              -d text="$MSG" \
+              -d parse_mode="Markdown" \
+              -d disable_web_page_preview=true
           fi
           
           python3 /tmp/notify.py 100 7 update
