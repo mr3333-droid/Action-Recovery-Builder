@@ -386,13 +386,24 @@ jobs:
         FOLDER_NAME="${{ env.ZINCDRIVE_FOLDER }}"
         API_BASE="https://zincdrive.com/api/v1"
         
-        if [ "$FOLDER_NAME" = "zorn-stable" ]; then
-          VISIBILITY=1
-        elif [ "$FOLDER_NAME" = "zorn-experimental" ]; then
-          VISIBILITY=0
-        else
-          VISIBILITY=2
-        fi
+        case "$FOLDER_NAME" in
+          "zorn-stable")
+            VISIBILITY=1
+            FOLDER_HASH="Pbe3PVLeGlX6"
+            ;;
+          "zorn-beta")
+            VISIBILITY=2
+            FOLDER_HASH="k0emb1Z9GVb4"
+            ;;
+          "zorn-nightly")
+            VISIBILITY=2
+            FOLDER_HASH="0Kezk1Z1mD1X"
+            ;;
+          "zorn-experimental")
+            VISIBILITY=0
+            FOLDER_HASH="1RgzRlK8mbpB"
+            ;;
+        esac
         
         upload_to_zinc() {
           local FILE_PATH="$1"
@@ -415,7 +426,7 @@ jobs:
             --data-binary "@${FILE_PATH}" "$UPLOAD_URL"
           
           local SIZE=$(stat -c%s "$FILE_PATH")
-          local CONFIRM_DATA="key=${KEY}&filename=${FILE_NAME}&size=${SIZE}&visibility=${VISIBILITY}"
+          local CONFIRM_DATA="key=${KEY}&filename=${FILE_NAME}&size=${SIZE}&visibility=${VISIBILITY}&folder=${FOLDER_HASH}"
           
           local CONFIRM_RESPONSE=$(curl -s -X POST \
             -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
@@ -435,7 +446,7 @@ jobs:
         fi
         
         MSG="📦 *Download Links for ${{ env.DEVICE_NAME }}:*"
-        MSG="${MSG} %0A📂 *Folder:* ${FOLDER_NAME}"
+        MSG="${MSG} %0A📂 *Folder:* ${FOLDER_NAME} (https://zdrive.to/${FOLDER_HASH})"
         
         if [ -n "$IMG_LINK" ]; then
           MSG="${MSG} %0A🔗 IMG: ${IMG_LINK}"
@@ -457,6 +468,7 @@ jobs:
         
         echo "IMG_LINK=$IMG_LINK" >> $GITHUB_ENV
         echo "ZIP_LINK=$ZIP_LINK" >> $GITHUB_ENV
+        echo "FOLDER_HASH=$FOLDER_HASH" >> $GITHUB_ENV
 
     - name: Upload to Release
       if: ${{ env.CREATE_RELEASE == 'Yes — Create Release (public)' }}
@@ -519,31 +531,33 @@ jobs:
         DEVICE_DIR="$FOX_DIR/${{ env.DEVICE_PATH }}"
         OUT_DIR="$FOX_DIR/out/target/product/${{ env.DEVICE_NAME }}"
         
-        upload_dirty_to_zinc() {
-          local FILE_PATH="$1"
-          local FILE_NAME="$2"
-          
-          local SIGN_RESPONSE=$(curl -s -X POST \
-            -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
-            -d "filename=${FILE_NAME}" \
-            "https://zincdrive.com/api/v1/s3/sign")
-          
-          local UPLOAD_URL=$(echo "$SIGN_RESPONSE" | jq -r '.url')
-          local KEY=$(echo "$SIGN_RESPONSE" | jq -r '.key')
-          
-          if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
-            return
-          fi
-          
-          curl -s -X PUT -H "Content-Type: application/octet-stream" \
-            --data-binary "@${FILE_PATH}" "$UPLOAD_URL"
-          
-          local SIZE=$(stat -c%s "$FILE_PATH")
-          curl -s -X POST \
-            -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
-            -d "key=${KEY}&filename=${FILE_NAME}&size=${SIZE}&visibility=2" \
-            "https://zincdrive.com/api/v1/s3/confirm" 2>/dev/null
-        }
+        if [ -n "${{ env.ZINCDRIVE_API_KEY }}" ]; then
+          upload_dirty_to_zinc() {
+            local FILE_PATH="$1"
+            local FILE_NAME="$2"
+            
+            local SIGN_RESPONSE=$(curl -s -X POST \
+              -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
+              -d "filename=${FILE_NAME}" \
+              "https://zincdrive.com/api/v1/s3/sign")
+            
+            local UPLOAD_URL=$(echo "$SIGN_RESPONSE" | jq -r '.url')
+            local KEY=$(echo "$SIGN_RESPONSE" | jq -r '.key')
+            
+            if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
+              return
+            fi
+            
+            curl -s -X PUT -H "Content-Type: application/octet-stream" \
+              --data-binary "@${FILE_PATH}" "$UPLOAD_URL"
+            
+            local SIZE=$(stat -c%s "$FILE_PATH")
+            curl -s -X POST \
+              -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
+              -d "key=${KEY}&filename=${FILE_NAME}&size=${SIZE}&visibility=2&folder=0Kezk1Z1mD1X" \
+              "https://zincdrive.com/api/v1/s3/confirm" 2>/dev/null
+          }
+        fi
         
         while true; do
           NOW=$(date +%s)
@@ -620,4 +634,3 @@ jobs:
           
           python3 /tmp/notify.py 100 7 update
         done
-      
