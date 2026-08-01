@@ -128,124 +128,124 @@ jobs:
         fi
         echo $(date +%s) > /tmp/build_start_time
 
-        cat <<'EOF' > /tmp/notify.py
-import os, sys, time, json, urllib.request, urllib.parse
+        cat <<'EOF' | sed 's/^        //' > /tmp/notify.py
+        import os, sys, time, json, urllib.request, urllib.parse
 
-token = os.getenv("TG_BOT_TOKEN")
-chat_id = os.getenv("TG_CHAT_ID")
-msg_id = os.getenv("TG_MSG_ID")
+        token = os.getenv("TG_BOT_TOKEN")
+        chat_id = os.getenv("TG_CHAT_ID")
+        msg_id = os.getenv("TG_MSG_ID")
 
-if not token or not chat_id:
-    sys.exit(0)
+        if not token or not chat_id:
+            sys.exit(0)
 
-start_file = "/tmp/build_start_time"
-start_time = int(open(start_file).read().strip()) if os.path.exists(start_file) else int(time.time())
-now = int(time.time())
-elapsed = max(0, now - start_time)
-e_min, e_sec = elapsed // 60, elapsed % 60
-elapsed_str = f"{e_min}m {e_sec}s"
+        start_file = "/tmp/build_start_time"
+        start_time = int(open(start_file).read().strip()) if os.path.exists(start_file) else int(time.time())
+        now = int(time.time())
+        elapsed = max(0, now - start_time)
+        e_min, e_sec = elapsed // 60, elapsed % 60
+        elapsed_str = f"{e_min}m {e_sec}s"
 
-percent = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-current_step = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-mode = sys.argv[3] if len(sys.argv) > 3 else "update"
-custom_status = sys.argv[4] if len(sys.argv) > 4 else ""
+        percent = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+        current_step = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+        mode = sys.argv[3] if len(sys.argv) > 3 else "update"
+        custom_status = sys.argv[4] if len(sys.argv) > 4 else ""
 
-if 0 < percent < 100:
-    est_total = int(elapsed * 100 / percent)
-    rem = max(0, est_total - elapsed)
-    r_min, r_sec = rem // 60, rem % 60
-    rem_str = f"~{r_min}m {r_sec}s"
-elif percent >= 100:
-    rem_str = "0m 0s"
-else:
-    rem_str = "Calculating..."
+        if 0 < percent < 100:
+            est_total = int(elapsed * 100 / percent)
+            rem = max(0, est_total - elapsed)
+            r_min, r_sec = rem // 60, rem % 60
+            rem_str = f"~{r_min}m {r_sec}s"
+        elif percent >= 100:
+            rem_str = "0m 0s"
+        else:
+            rem_str = "Calculating..."
 
-filled = int(20 * percent // 100)
-bar = "█" * filled + "░" * (20 - filled)
+        filled = int(20 * percent // 100)
+        bar = "█" * filled + "░" * (20 - filled)
 
-device = os.getenv("DEVICE_NAME", "Unknown")
-branch = os.getenv("MANIFEST_BRANCH", "14.1")
-target = os.getenv("BUILD_TARGET", "recovery")
-commit = os.getenv("LATEST_COMMIT", "Pending")
-commit_url = os.getenv("COMMIT_URL", "")
-run_id = os.getenv("GITHUB_RUN_ID", "")
-repo = os.getenv("GITHUB_REPOSITORY", "")
-run_url = f"https://github.com/{repo}/actions/runs/{run_id}"
+        device = os.getenv("DEVICE_NAME", "Unknown")
+        branch = os.getenv("MANIFEST_BRANCH", "14.1")
+        target = os.getenv("BUILD_TARGET", "recovery")
+        commit = os.getenv("LATEST_COMMIT", "Pending")
+        commit_url = os.getenv("COMMIT_URL", "")
+        run_id = os.getenv("GITHUB_RUN_ID", "")
+        repo = os.getenv("GITHUB_REPOSITORY", "")
+        run_url = f"https://github.com/{repo}/actions/runs/{run_id}"
 
-steps = [
-    "1. Server Setup & Dependencies",
-    "2. Source Code Sync",
-    "3. Device Tree Clone",
-    "4. Target Environment Setup",
-    "5. Recovery Compilation (mka)",
-    "6. Artifact Output Check",
-    "7. Release & Artifact Upload"
-]
+        steps = [
+            "1. Server Setup & Dependencies",
+            "2. Source Code Sync",
+            "3. Device Tree Clone",
+            "4. Target Environment Setup",
+            "5. Recovery Compilation (mka)",
+            "6. Artifact Output Check",
+            "7. Release & Artifact Upload"
+        ]
 
-steps_text = ""
-for idx, s in enumerate(steps, 1):
-    if idx < current_step:
-        icon = "  ✅ "
-    elif idx == current_step:
-        icon = "  ❌ " if custom_status == "failed" else "  ⏳ "
-    else:
-        icon = "  ⏹ "
-    steps_text += f"{icon}*{s}*\n"
+        steps_text = ""
+        for idx, s in enumerate(steps, 1):
+            if idx < current_step:
+                icon = "  ✅ "
+            elif idx == current_step:
+                icon = "  ❌ " if custom_status == "failed" else "  ⏳ "
+            else:
+                icon = "  ⏹ "
+            steps_text += f"{icon}*{s}*\n"
 
-commit_text = f"[`{commit}`]({commit_url})" if commit_url and commit != "Pending" else f"`{commit}`"
+        commit_text = f"[`{commit}`]({commit_url})" if commit_url and commit != "Pending" else f"`{commit}`"
 
-if custom_status == "failed":
-    header = "❌ *RECOVERY BUILD FAILED*"
-    footer = f"⚠️ *Build failed at Step {current_step}!*\n🔗 [View Error Logs on GitHub]({run_url})"
-elif percent >= 100:
-    header = "🎉 *RECOVERY BUILT SUCCESSFULLY!*"
-    release_url = os.getenv("RELEASE_URL", run_url)
-    footer = f"🚀 *Build completed in {elapsed_str}!*\n📦 [Download Release / Artifacts]({release_url})"
-else:
-    header = "🛠 *REAL-TIME BUILD DASHBOARD*"
-    footer = f"🔗 [View Workflow Run on GitHub]({run_url})"
+        if custom_status == "failed":
+            header = "❌ *RECOVERY BUILD FAILED*"
+            footer = f"⚠️ *Build failed at Step {current_step}!*\n🔗 [View Error Logs on GitHub]({run_url})"
+        elif percent >= 100:
+            header = "🎉 *RECOVERY BUILT SUCCESSFULLY!*"
+            release_url = os.getenv("RELEASE_URL", run_url)
+            footer = f"🚀 *Build completed in {elapsed_str}!*\n📦 [Download Release / Artifacts]({release_url})"
+        else:
+            header = "🛠 *REAL-TIME BUILD DASHBOARD*"
+            footer = f"🔗 [View Workflow Run on GitHub]({run_url})"
 
-text = f"""{header}
-─────────────────────────────
-📱 *Device:* `{device}`
-🌿 *Manifest:* `{branch}` | *Target:* `{target}`
-🌲 *Commit Tree:* {commit_text}
-─────────────────────────────
-📊 *Progress:* `[{bar}]` *{percent}%*
-⏱ *Elapsed:* `{elapsed_str}` | ⌛ *Remaining:* `{rem_str}`
-─────────────────────────────
-📌 *BUILD STEPS:*
-{steps_text}─────────────────────────────
-{footer}"""
+        text = f"""{header}
+        ─────────────────────────────
+        📱 *Device:* `{device}`
+        🌿 *Manifest:* `{branch}` | *Target:* `{target}`
+        🌲 *Commit Tree:* {commit_text}
+        ─────────────────────────────
+        📊 *Progress:* `[{bar}]` *{percent}%*
+        ⏱ *Elapsed:* `{elapsed_str}` | ⌛ *Remaining:* `{rem_str}`
+        ─────────────────────────────
+        📌 *BUILD STEPS:*
+        {steps_text}─────────────────────────────
+        {footer}"""
 
-if mode == "init":
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = urllib.parse.urlencode({
-        "chat_id": chat_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": "true"
-    }).encode()
-    try:
-        req = urllib.request.Request(url, data=data)
-        with urllib.request.urlopen(req) as resp:
-            res = json.loads(resp.read().decode())
-            m_id = res.get("result", {}).get("message_id")
-            if m_id:
-                with open(os.environ["GITHUB_ENV"], "a") as f:
-                    f.write(f"TG_MSG_ID={m_id}\n")
-    except Exception as e:
-        print("TG Init Error:", e)
-else:
-    if not msg_id:
-        sys.exit(0)
-    url = f"https://api.telegram.org/bot{token}/editMessageText"
-    data = urllib.parse.urlencode({
-        "chat_id": chat_id, "message_id": msg_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": "true"
-    }).encode()
-    try:
-        req = urllib.request.Request(url, data=data)
-        urllib.request.urlopen(req)
-    except Exception as e:
-        print("TG Update Error:", e)
-EOF
+        if mode == "init":
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            data = urllib.parse.urlencode({
+                "chat_id": chat_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": "true"
+            }).encode()
+            try:
+                req = urllib.request.Request(url, data=data)
+                with urllib.request.urlopen(req) as resp:
+                    res = json.loads(resp.read().decode())
+                    m_id = res.get("result", {}).get("message_id")
+                    if m_id:
+                        with open(os.environ["GITHUB_ENV"], "a") as f:
+                            f.write(f"TG_MSG_ID={m_id}\n")
+            except Exception as e:
+                print("TG Init Error:", e)
+        else:
+            if not msg_id:
+                sys.exit(0)
+            url = f"https://api.telegram.org/bot{token}/editMessageText"
+            data = urllib.parse.urlencode({
+                "chat_id": chat_id, "message_id": msg_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": "true"
+            }).encode()
+            try:
+                req = urllib.request.Request(url, data=data)
+                urllib.request.urlopen(req)
+            except Exception as e:
+                print("TG Update Error:", e)
+        EOF
         chmod +x /tmp/notify.py
         python3 /tmp/notify.py 5 1 init
 
