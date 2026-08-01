@@ -160,12 +160,12 @@ jobs:
         steps_text = ""
         for idx, s in enumerate(steps, 1):
             if idx < current_step:
-                icon = "  ✅ "
+                icon = "✅"
             elif idx == current_step:
-                icon = "  ❌ " if custom_status == "failed" else "  ⏳ "
+                icon = "❌" if custom_status == "failed" else "⏳"
             else:
-                icon = "  ⏹ "
-            steps_text += f"{icon}*{s}*\n"
+                icon = "⏹"
+            steps_text += f"{icon} *{s}*\n"
 
         commit_text = f"[`{commit}`]({commit_url})" if commit_url and commit != "Pending" else f"`{commit}`"
 
@@ -181,17 +181,18 @@ jobs:
             footer = f"🔗 [View Workflow Run on GitHub]({run_url})"
 
         text = f"""{header}
-─────────────────────────────
-📱 *Device:* `{device}`
-🌿 *Manifest:* `{branch}` | *Target:* `{target}`
-🌲 *Commit Tree:* {commit_text}
-─────────────────────────────
-📊 *Progress:* `[{bar}]` *{percent}%*
-⏱ *Elapsed:* `{elapsed_str}` | ⌛ *Remaining:* `{rem_str}`
-─────────────────────────────
-📌 *BUILD STEPS:*
-{steps_text}─────────────────────────────
-{footer}"""
+        ─────────────────────────────
+        📱 *Device:* `{device}`
+        🌿 *Manifest:* `{branch}` | *Target:* `{target}`
+        🌲 *Commit Tree:* {commit_text}
+        ─────────────────────────────
+        📊 *Progress:* `[{bar}]` *{percent}%*
+        ⏱ *Elapsed:* `{elapsed_str}` | ⌛ *Remaining:* `{rem_str}`
+        ─────────────────────────────
+        📌 *BUILD STEPS:*
+        {steps_text}
+        ─────────────────────────────
+        {footer}"""
 
         if mode == "init":
             url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -348,7 +349,7 @@ jobs:
         fi
         
         IMG_PATH="$OUT_DIR/$IMG_NAME"
-        ZIP_PATH=$(ls $OUT_DIR/OrangeFox-R*.zip 2>/devnull | head -n 1 || true)
+        ZIP_PATH=$(ls $OUT_DIR/OrangeFox-R*.zip 2>/dev/null | head -n 1 || true)
         
         echo "IMG_PATH=$IMG_PATH" >> $GITHUB_ENV
         echo "ZIP_PATH=$ZIP_PATH" >> $GITHUB_ENV
@@ -458,7 +459,7 @@ jobs:
             IMG_NAME="recovery.img"
           fi
           
-          ZIP_FILE=$(ls "$OUT_DIR"/OrangeFox-R*.zip 2>/devnull | head -n 1 || true)
+          ZIP_FILE=$(ls "$OUT_DIR"/OrangeFox-R*.zip 2>/dev/null | head -n 1 || true)
           TAG_NAME="${{ github.run_id }}-${BUILD_COUNT}"
           RELEASE_NAME="${{ env.DEVICE_NAME }}-${TAG_NAME}"
           
@@ -473,4 +474,3 @@ jobs:
           
           python3 /tmp/notify.py 100 7 update
         done
-        
