@@ -61,23 +61,6 @@ on:
         type: string
         default: ""
 
-      zincdrive_api_key:
-        description: "ZincDrive API Key (leave empty to disable)"
-        required: false
-        type: string
-        default: ""
-
-      zincdrive_folder:
-        description: "ZincDrive destination folder"
-        required: false
-        type: choice
-        default: "zorn-beta"
-        options:
-          - "zorn-stable"
-          - "zorn-beta"
-          - "zorn-nightly"
-          - "zorn-experimental"
-
       create_release:
         description: "Create public GitHub Release?"
         required: true
@@ -107,8 +90,6 @@ jobs:
       DT_TOKEN: ${{ inputs.dt_token }}
       TG_BOT_TOKEN: ${{ inputs.telegram_bot_token }}
       TG_CHAT_ID: ${{ inputs.telegram_chat_id }}
-      ZINCDRIVE_API_KEY: ${{ inputs.zincdrive_api_key }}
-      ZINCDRIVE_FOLDER: ${{ inputs.zincdrive_folder }}
       CREATE_RELEASE: ${{ inputs.create_release }}
       WATCH_UNTIL_SECONDS: 20700
       WATCH_INTERVAL_SECONDS: 600
@@ -119,9 +100,6 @@ jobs:
       run: |
         if [ -n "${{ env.TG_BOT_TOKEN }}" ]; then
           echo "::add-mask::${{ env.TG_BOT_TOKEN }}"
-        fi
-        if [ -n "${{ env.ZINCDRIVE_API_KEY }}" ]; then
-          echo "::add-mask::${{ env.ZINCDRIVE_API_KEY }}"
         fi
         echo $(date +%s) > /tmp/build_start_time
 
@@ -148,7 +126,17 @@ jobs:
         custom_status = sys.argv[4] if len(sys.argv) > 4 else ""
 
         if 0 < percent < 100:
-            est_total = int(elapsed * 100 / percent)
+            if percent <= 5:
+                est_total = elapsed + 5100
+            elif percent <= 30:
+                est_total = elapsed + 3600
+            elif percent <= 60:
+                est_total = elapsed + 2400
+            elif percent <= 85:
+                est_total = elapsed + 900
+            else:
+                est_total = elapsed + 300
+            
             rem = max(0, est_total - elapsed)
             r_min, r_sec = rem // 60, rem % 60
             rem_str = f"~{r_min}m {r_sec}s"
@@ -170,13 +158,13 @@ jobs:
         run_url = f"https://github.com/{repo}/actions/runs/{run_id}"
 
         steps = [
-            "1. Server Setup",
-            "2. Source Code Sync",
-            "3. Device Tree Clone",
-            "4. Target Environment Setup",
-            "5. Compilation",
-            "6. Artifact Output Check",
-            "7. Release"
+            "1. Preparing Server",
+            "2. Syncing Sources",
+            "3. Cloning Device Tree",
+            "4. Setting Up Build Env",
+            "5. Compiling Recovery",
+            "6. Packaging Artifacts",
+            "7. Uploading Release"
         ]
 
         steps_text = ""
@@ -386,96 +374,6 @@ jobs:
         echo "IMG_PATH=$IMG_PATH" >> $GITHUB_ENV
         echo "ZIP_PATH=$ZIP_PATH" >> $GITHUB_ENV
 
-    - name: Upload to ZincDrive via S3 and send links to Telegram
-      if: success() && env.ZINCDRIVE_API_KEY != ''
-      run: |
-        FOLDER_NAME="${{ env.ZINCDRIVE_FOLDER }}"
-        API_BASE="https://zincdrive.com/api/v1"
-        
-        case "$FOLDER_NAME" in
-          "zorn-stable")
-            VISIBILITY=1
-            FOLDER_HASH="Pbe3PVLeGlX6"
-            ;;
-          "zorn-beta")
-            VISIBILITY=2
-            FOLDER_HASH="k0emb1Z9GVb4"
-            ;;
-          "zorn-nightly")
-            VISIBILITY=2
-            FOLDER_HASH="0Kezk1Z1mD1X"
-            ;;
-          "zorn-experimental")
-            VISIBILITY=0
-            FOLDER_HASH="1RgzRlK8mbpB"
-            ;;
-        esac
-        
-        upload_to_zinc() {
-          local FILE_PATH="$1"
-          local FILE_NAME="$2"
-          
-          local SIGN_RESPONSE=$(curl -s -X POST \
-            -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
-            -d "filename=${FILE_NAME}" \
-            "${API_BASE}/s3/sign")
-          
-          local UPLOAD_URL=$(echo "$SIGN_RESPONSE" | jq -r '.url')
-          local KEY=$(echo "$SIGN_RESPONSE" | jq -r '.key')
-          
-          if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
-            echo ""
-            return
-          fi
-          
-          curl -s -X PUT -H "Content-Type: application/octet-stream" \
-            --data-binary "@${FILE_PATH}" "$UPLOAD_URL"
-          
-          local SIZE=$(stat -c%s "$FILE_PATH")
-          local CONFIRM_DATA="key=${KEY}&filename=${FILE_NAME}&size=${SIZE}&visibility=${VISIBILITY}&folder=${FOLDER_HASH}"
-          
-          local CONFIRM_RESPONSE=$(curl -s -X POST \
-            -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
-            -d "$CONFIRM_DATA" \
-            "${API_BASE}/s3/confirm")
-          
-          echo "$CONFIRM_RESPONSE" | jq -r '.download_link // empty'
-        }
-        
-        IMG_NAME=$(basename "${{ env.IMG_PATH }}")
-        IMG_LINK=$(upload_to_zinc "${{ env.IMG_PATH }}" "$IMG_NAME")
-        
-        ZIP_LINK=""
-        if [ -f "${{ env.ZIP_PATH }}" ]; then
-          ZIP_NAME=$(basename "${{ env.ZIP_PATH }}")
-          ZIP_LINK=$(upload_to_zinc "${{ env.ZIP_PATH }}" "$ZIP_NAME")
-        fi
-        
-        MSG="📦 *Download Links for ${{ env.DEVICE_NAME }}:*"
-        MSG="${MSG} %0A📂 *Folder:* ${FOLDER_NAME} (https://zdrive.to/${FOLDER_HASH})"
-        
-        if [ -n "$IMG_LINK" ]; then
-          MSG="${MSG} %0A🔗 IMG: ${IMG_LINK}"
-        fi
-        
-        if [ -n "$ZIP_LINK" ]; then
-          MSG="${MSG} %0A🔗 ZIP: ${ZIP_LINK}"
-        fi
-        
-        if [ -z "$IMG_LINK" ] && [ -z "$ZIP_LINK" ]; then
-          MSG="${MSG} %0A⚠️ Upload to ZincDrive failed. Check workflow logs."
-        fi
-        
-        curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
-          -d chat_id="${{ env.TG_CHAT_ID }}" \
-          -d text="$MSG" \
-          -d parse_mode="Markdown" \
-          -d disable_web_page_preview=true
-        
-        echo "IMG_LINK=$IMG_LINK" >> $GITHUB_ENV
-        echo "ZIP_LINK=$ZIP_LINK" >> $GITHUB_ENV
-        echo "FOLDER_HASH=$FOLDER_HASH" >> $GITHUB_ENV
-
     - name: Upload to Release
       if: ${{ env.CREATE_RELEASE == 'Yes — Create Release (public)' }}
       uses: softprops/action-gh-release@v2
@@ -490,10 +388,6 @@ jobs:
           Device: ${{ env.DEVICE_NAME }}
           Target: ${{ env.BUILD_TARGET }}
           Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}](${{ env.ORIGINAL_URL }}/tree/${{ steps.devtree_commit.outputs.LATEST_COMMIT }})
-          
-          ## 📥 Direct Download Links
-          ${{ env.IMG_LINK && format('🔗 IMG: {0}', env.IMG_LINK) || '' }}
-          ${{ env.ZIP_LINK && format('🔗 ZIP: {0}', env.ZIP_LINK) || '' }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -517,12 +411,26 @@ jobs:
       if: success()
       run: |
         if [ "${{ env.CREATE_RELEASE }}" = "Yes — Create Release (public)" ]; then
-          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_RUN_ID}" >> $GITHUB_ENV
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${{ github.run_id }}"
+          echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
+          
+          python3 /tmp/notify.py 100 7 update
+          
+          MSG="📦 *Download Links for ${{ env.DEVICE_NAME }}:*"
+          MSG="${MSG} %0A🔗 Release: ${RELEASE_URL}"
+          MSG="${MSG} %0A📱 Device: \`${{ env.DEVICE_NAME }}\`"
+          MSG="${MSG} %0A🌿 Branch: \`${{ env.MANIFEST_BRANCH }}\`"
+          MSG="${MSG} %0A🎯 Target: \`${{ env.BUILD_TARGET }}\`"
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ env.TG_CHAT_ID }}" \
+            -d text="$MSG" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true
         else
-          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> $GITHUB_ENV
+          echo "RELEASE_URL=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_ENV
+          python3 /tmp/notify.py 100 7 update
         fi
-        
-        python3 /tmp/notify.py 100 7 update
 
     - name: Watch for device tree changes and dirty build
       if: success()
@@ -536,34 +444,6 @@ jobs:
         TWRP_DIR="$WORKSPACE/twrp_test_16.0"
         DEVICE_DIR="$TWRP_DIR/${{ env.DEVICE_PATH }}"
         OUT_DIR="$TWRP_DIR/out/target/product/${{ env.DEVICE_NAME }}"
-        
-        if [ -n "${{ env.ZINCDRIVE_API_KEY }}" ]; then
-          upload_dirty_to_zinc() {
-            local FILE_PATH="$1"
-            local FILE_NAME="$2"
-            
-            local SIGN_RESPONSE=$(curl -s -X POST \
-              -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
-              -d "filename=${FILE_NAME}" \
-              "https://zincdrive.com/api/v1/s3/sign")
-            
-            local UPLOAD_URL=$(echo "$SIGN_RESPONSE" | jq -r '.url')
-            local KEY=$(echo "$SIGN_RESPONSE" | jq -r '.key')
-            
-            if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
-              return
-            fi
-            
-            curl -s -X PUT -H "Content-Type: application/octet-stream" \
-              --data-binary "@${FILE_PATH}" "$UPLOAD_URL"
-            
-            local SIZE=$(stat -c%s "$FILE_PATH")
-            curl -s -X POST \
-              -H "X-API-Key: ${{ env.ZINCDRIVE_API_KEY }}" \
-              -d "key=${KEY}&filename=${FILE_NAME}&size=${SIZE}&visibility=2&folder=0Kezk1Z1mD1X" \
-              "https://zincdrive.com/api/v1/s3/confirm" 2>/dev/null
-          }
-        fi
         
         while true; do
           NOW=$(date +%s)
@@ -610,19 +490,14 @@ jobs:
           elif [ "${{ env.BUILD_TARGET }}" = "boot" ]; then
             IMG_NAME="boot.img"
           else
-            IMG_NAME="recovery.img"
+            IMG_NAME="twrp-16.0-${{ env.DEVICE_NAME }}.img"
+          fi
+          
+          if [ -f "$OUT_DIR/recovery.img" ]; then
+            cp "$OUT_DIR/recovery.img" "$OUT_DIR/$IMG_NAME"
           fi
           
           ZIP_FILE=$(ls "$OUT_DIR"/*.zip 2>/dev/null | head -n 1 || true)
-          
-          if [ -n "${{ env.ZINCDRIVE_API_KEY }}" ]; then
-            upload_dirty_to_zinc "$OUT_DIR/$IMG_NAME" "$IMG_NAME"
-            
-            if [ -n "$ZIP_FILE" ]; then
-              ZIP_NAME=$(basename "$ZIP_FILE")
-              upload_dirty_to_zinc "$ZIP_FILE" "$ZIP_NAME"
-            fi
-          fi
           
           if [ "${{ env.CREATE_RELEASE }}" = "Yes — Create Release (public)" ]; then
             TAG_NAME="${{ github.run_id }}-${BUILD_COUNT}"
@@ -636,6 +511,16 @@ jobs:
               
             RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG_NAME}"
             echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
+            
+            MSG="🔄 *Dirty Build #${BUILD_COUNT} for ${{ env.DEVICE_NAME }}:*"
+            MSG="${MSG} %0A🔗 Release: ${RELEASE_URL}"
+            MSG="${MSG} %0A🌲 Commit: \`${NEW_COMMIT_SHORT}\`"
+            
+            curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ env.TG_CHAT_ID }}" \
+              -d text="$MSG" \
+              -d parse_mode="Markdown" \
+              -d disable_web_page_preview=true
           fi
           
           python3 /tmp/notify.py 100 7 update
