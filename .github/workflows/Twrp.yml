@@ -70,11 +70,15 @@ on:
           - "Yes — Create Release (public)"
           - "No — Artifacts only (private)"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.device_name }}-${{ inputs.device_tree_branch }}-${{ inputs.build_target }}
+  cancel-in-progress: true
+
 jobs:
   build:
     if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 300
     permissions:
       contents: write
 
@@ -87,12 +91,10 @@ jobs:
       DEVICE_NAME: ${{ inputs.device_name }}
       MAKEFILE_NAME: ${{ inputs.makefile_name }}
       BUILD_TARGET: ${{ inputs.build_target }}
-      DT_TOKEN: ${{ inputs.dt_token }}
-      TG_BOT_TOKEN: ${{ inputs.telegram_bot_token }}
-      TG_CHAT_ID: ${{ inputs.telegram_chat_id }}
+      DT_TOKEN: ${{ secrets.DT_TOKEN || inputs.dt_token }}
+      TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || inputs.telegram_bot_token }}
+      TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || inputs.telegram_chat_id }}
       CREATE_RELEASE: ${{ inputs.create_release }}
-      WATCH_UNTIL_SECONDS: 20700
-      WATCH_INTERVAL_SECONDS: 600
 
     steps:
 
@@ -261,7 +263,7 @@ jobs:
         fi
 
     - name: Cleanup
-      uses: rokibhasansagar/slimhub_actions@main
+      uses: rokibhasansagar/slimhub_actions@c2a6e4317d3de2b623ac7395b05e9d2149e8289b
 
     - name: Initialize workspace
       run: |
@@ -324,7 +326,7 @@ jobs:
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Set Swap Space
-      uses: pierotofy/set-swap-space@master
+      uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
       with:
         swap-size-gb: 40
 
@@ -338,16 +340,25 @@ jobs:
         set -e
         lunch ${{ env.MAKEFILE_NAME }}-bp2a-eng
         
-        if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
+        set -o pipefail
+        if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all) 2>&1 | tee "$RUNNER_TEMP/recovery-build.log"; then
           exit 1
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Upload build failure log
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.DEVICE_NAME }}-${{ env.BUILD_TARGET }}-failure-log
+        path: ${{ runner.temp }}/recovery-build.log
+        retention-days: 7
+        if-no-files-found: ignore
 
     - name: Notify Build Failure
       if: failure()
       run: |
         [ -f /tmp/notify.py ] && python3 /tmp/notify.py 60 5 update failed
-        exit 1
 
     - name: Prepare build output paths
       id: prepare_outputs
@@ -371,16 +382,50 @@ jobs:
         
         ZIP_PATH=$(ls $OUT_DIR/*.zip 2>/dev/null | head -n 1 || true)
         
+        if [ ! -s "$IMG_PATH" ]; then
+          echo "FATAL: expected build image not found: $IMG_PATH"
+          echo "Output directory contents:"
+          ls -lah "$OUT_DIR" || true
+          exit 1
+        fi
+
+        CHECKSUMS_PATH="$OUT_DIR/SHA256SUMS"
+        (
+          cd "$OUT_DIR"
+          sha256sum "$(basename "$IMG_PATH")"
+          if [ -n "$ZIP_PATH" ] && [ -s "$ZIP_PATH" ]; then
+            sha256sum "$(basename "$ZIP_PATH")"
+          fi
+        ) > "$CHECKSUMS_PATH"
+
         echo "IMG_PATH=$IMG_PATH" >> $GITHUB_ENV
         echo "ZIP_PATH=$ZIP_PATH" >> $GITHUB_ENV
+        echo "CHECKSUMS_PATH=$CHECKSUMS_PATH" >> $GITHUB_ENV
+
+    - name: Build summary
+      run: |
+        {
+          echo "### Recovery build"
+          echo "- Device: \`${DEVICE_NAME}\`"
+          echo "- Target: \`${BUILD_TARGET}\`"
+          echo "- Device tree: \`${DEVICE_TREE_BRANCH}\` @ \`${LATEST_COMMIT}\`"
+          echo "- Image: \`$(basename "$IMG_PATH")\`"
+          if [ -n "$ZIP_PATH" ]; then echo "- Installer: \`$(basename "$ZIP_PATH")\`"; fi
+          echo ""
+          echo "#### SHA-256"
+          echo '```text'
+          cat "$CHECKSUMS_PATH"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upload to Release
       if: ${{ env.CREATE_RELEASE == 'Yes — Create Release (public)' }}
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
       with:
         files: |
           ${{ env.IMG_PATH }}
           ${{ env.ZIP_PATH }}
+          ${{ env.CHECKSUMS_PATH }}
         name: ${{ env.DEVICE_NAME }}-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
         body: |
@@ -396,8 +441,11 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.DEVICE_NAME }}-${{ env.BUILD_TARGET }}-img
-        path: ${{ env.IMG_PATH }}
-        retention-days: 90
+        path: |
+          ${{ env.IMG_PATH }}
+          ${{ env.CHECKSUMS_PATH }}
+        retention-days: 14
+        if-no-files-found: error
 
     - name: Upload Installer Zip Artifact (private)
       if: ${{ env.CREATE_RELEASE != 'Yes — Create Release (public)' && env.ZIP_PATH != '' }}
@@ -405,7 +453,8 @@ jobs:
       with:
         name: ${{ env.DEVICE_NAME }}-installer-zip
         path: ${{ env.ZIP_PATH }}
-        retention-days: 90
+        retention-days: 14
+        if-no-files-found: error
 
     - name: Notify Build Complete
       if: success()
@@ -422,106 +471,14 @@ jobs:
           MSG="${MSG} %0A🌿 Branch: \`${{ env.MANIFEST_BRANCH }}\`"
           MSG="${MSG} %0A🎯 Target: \`${{ env.BUILD_TARGET }}\`"
           
-          curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ env.TG_CHAT_ID }}" \
-            -d text="$MSG" \
-            -d parse_mode="Markdown" \
-            -d disable_web_page_preview=true
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TG_CHAT_ID}" \
+              -d text="$MSG" \
+              -d parse_mode="Markdown" \
+              -d disable_web_page_preview=true || echo "Telegram notification failed; build remains successful."
+          fi
         else
           echo "RELEASE_URL=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_ENV
           python3 /tmp/notify.py 100 7 update
         fi
-
-    - name: Watch for device tree changes and dirty build
-      if: success()
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        START_TIME=$(date +%s)
-        BUILD_COUNT=0
-        CURRENT_COMMIT="${{ steps.devtree_commit.outputs.LATEST_COMMIT_FULL }}"
-        WORKSPACE="${{ steps.pwd.outputs.workspace-folder }}"
-        TWRP_DIR="$WORKSPACE/twrp_test_16.0"
-        DEVICE_DIR="$TWRP_DIR/${{ env.DEVICE_PATH }}"
-        OUT_DIR="$TWRP_DIR/out/target/product/${{ env.DEVICE_NAME }}"
-        
-        while true; do
-          NOW=$(date +%s)
-          ELAPSED=$((NOW - START_TIME))
-          if [ "$ELAPSED" -ge "${{ env.WATCH_UNTIL_SECONDS }}" ]; then
-            break
-          fi
-          sleep "${{ env.WATCH_INTERVAL_SECONDS }}"
-          NOW=$(date +%s)
-          ELAPSED=$((NOW - START_TIME))
-          if [ "$ELAPSED" -ge "${{ env.WATCH_UNTIL_SECONDS }}" ]; then
-            break
-          fi
-          cd "$DEVICE_DIR"
-          git fetch origin "${{ env.DEVICE_TREE_BRANCH }}"
-          NEW_COMMIT=$(git rev-parse "origin/${{ env.DEVICE_TREE_BRANCH }}")
-          NEW_COMMIT_SHORT=$(echo "$NEW_COMMIT" | cut -c1-7)
-          CURRENT_COMMIT_SHORT=$(echo "$CURRENT_COMMIT" | cut -c1-7)
-          if [ "$NEW_COMMIT" = "$CURRENT_COMMIT" ]; then
-            continue
-          fi
-          BUILD_COUNT=$((BUILD_COUNT + 1))
-          
-          echo $(date +%s) > /tmp/build_start_time
-          echo "LATEST_COMMIT=$NEW_COMMIT_SHORT" >> $GITHUB_ENV
-          
-          python3 /tmp/notify.py 50 5 update
-
-          git reset --hard "$NEW_COMMIT"
-          CURRENT_COMMIT="$NEW_COMMIT"
-          cd "$TWRP_DIR"
-          source build/envsetup.sh
-          export ALLOW_MISSING_DEPENDENCIES=true
-          set -e
-          lunch ${{ env.MAKEFILE_NAME }}-bp2a-eng
-          
-          if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
-            python3 /tmp/notify.py 50 5 update failed
-            continue
-          fi
-          
-          if [ "${{ env.BUILD_TARGET }}" = "vendorboot" ]; then
-            IMG_NAME="vendor_boot.img"
-          elif [ "${{ env.BUILD_TARGET }}" = "boot" ]; then
-            IMG_NAME="boot.img"
-          else
-            IMG_NAME="twrp-16.0-${{ env.DEVICE_NAME }}.img"
-          fi
-          
-          if [ -f "$OUT_DIR/recovery.img" ]; then
-            cp "$OUT_DIR/recovery.img" "$OUT_DIR/$IMG_NAME"
-          fi
-          
-          ZIP_FILE=$(ls "$OUT_DIR"/*.zip 2>/dev/null | head -n 1 || true)
-          
-          if [ "${{ env.CREATE_RELEASE }}" = "Yes — Create Release (public)" ]; then
-            TAG_NAME="${{ github.run_id }}-${BUILD_COUNT}"
-            RELEASE_NAME="${{ env.DEVICE_NAME }}-${TAG_NAME}"
-            
-            gh release create "$TAG_NAME" \
-              "$OUT_DIR/$IMG_NAME" \
-              $ZIP_FILE \
-              --title "$RELEASE_NAME" \
-              --notes "Dirty build: #${BUILD_COUNT}"
-              
-            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG_NAME}"
-            echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
-            
-            MSG="🔄 *Dirty Build #${BUILD_COUNT} for ${{ env.DEVICE_NAME }}:*"
-            MSG="${MSG} %0A🔗 Release: ${RELEASE_URL}"
-            MSG="${MSG} %0A🌲 Commit: \`${NEW_COMMIT_SHORT}\`"
-            
-            curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
-              -d chat_id="${{ env.TG_CHAT_ID }}" \
-              -d text="$MSG" \
-              -d parse_mode="Markdown" \
-              -d disable_web_page_preview=true
-          fi
-          
-          python3 /tmp/notify.py 100 7 update
-        done
