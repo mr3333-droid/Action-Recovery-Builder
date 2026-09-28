@@ -1,0 +1,220 @@
+name: Recovery build core
+
+on:
+  workflow_call:
+    inputs:
+      build_flavor:
+        required: true
+        type: string
+      build_label:
+        required: true
+        type: string
+      manifest_url:
+        required: true
+        type: string
+      manifest_branch:
+        required: true
+        type: string
+      lunch_suffix:
+        required: true
+        type: string
+      device_tree_url:
+        required: true
+        type: string
+      device_tree_branch:
+        required: true
+        type: string
+      device_path:
+        required: true
+        type: string
+      device_name:
+        required: true
+        type: string
+      makefile_name:
+        required: true
+        type: string
+      build_target:
+        required: true
+        type: string
+      create_release:
+        required: true
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.build_flavor }}-${{ inputs.device_name }}-${{ inputs.device_tree_branch }}-${{ inputs.build_target }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: write
+
+    env:
+      BUILD_FLAVOR: ${{ inputs.build_flavor }}
+      BUILD_LABEL: ${{ inputs.build_label }}
+      MANIFEST_URL: ${{ inputs.manifest_url }}
+      MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
+      LUNCH_SUFFIX: ${{ inputs.lunch_suffix }}
+      DEVICE_TREE_URL: ${{ inputs.device_tree_url }}
+      DEVICE_TREE_BRANCH: ${{ inputs.device_tree_branch }}
+      DEVICE_PATH: ${{ inputs.device_path }}
+      DEVICE_NAME: ${{ inputs.device_name }}
+      MAKEFILE_NAME: ${{ inputs.makefile_name }}
+      BUILD_TARGET: ${{ inputs.build_target }}
+      CREATE_RELEASE: ${{ inputs.create_release }}
+      DT_TOKEN: ${{ secrets.DT_TOKEN }}
+      TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      BUILD_WORKSPACE: ${{ runner.temp }}/recovery-workspace
+
+    steps:
+      - name: Reclaim runner disk space
+        uses: rokibhasansagar/slimhub_actions@c2a6e4317d3de2b623ac7395b05e9d2149e8289b
+
+      - name: Checkout builder helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Initialize build dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          date +%s > "$RUNNER_TEMP/build_start_time"
+          python3 scripts/notify.py 5 1 init
+
+      - name: Validate inputs
+        shell: bash
+        run: scripts/validate-inputs.sh
+
+      - name: Prepare build environment
+        shell: bash
+        run: |
+          python3 scripts/notify.py 15 1 update
+          scripts/setup-build-env.sh
+
+      - name: Install OpenJDK
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: zulu
+          java-version: "11"
+
+      - name: Sync recovery sources
+        shell: bash
+        run: |
+          python3 scripts/notify.py 30 2 update
+          scripts/sync-sources.sh
+
+      - name: Clone device tree
+        id: device_tree
+        shell: bash
+        run: |
+          python3 scripts/notify.py 45 3 update
+          scripts/clone-device-tree.sh
+
+      - name: Configure swap
+        uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
+        with:
+          swap-size-gb: 40
+
+      - name: Build recovery
+        shell: bash
+        run: |
+          python3 scripts/notify.py 60 5 update
+          set -eo pipefail
+          cd "$SOURCE_ROOT"
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          lunch "${MAKEFILE_NAME}-${LUNCH_SUFFIX}"
+          mka adbd "${BUILD_TARGET}image" -j"$(nproc --all)" 2>&1 | tee "$RUNNER_TEMP/recovery-build.log"
+
+      - name: Upload build failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.device_name }}-${{ inputs.build_target }}-failure-log
+          path: ${{ runner.temp }}/recovery-build.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Add failure tail to summary
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### Build failure"
+            echo '~~~text'
+            if [ -f "$RUNNER_TEMP/recovery-build.log" ]; then
+              tail -n 200 "$RUNNER_TEMP/recovery-build.log"
+            else
+              echo "Compilation log was not created; inspect the failed setup/sync step above."
+            fi
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify build failure
+        if: failure()
+        shell: bash
+        run: python3 scripts/notify.py 60 5 update failed || true
+
+      - name: Prepare outputs
+        if: success()
+        shell: bash
+        run: |
+          python3 scripts/notify.py 85 6 update
+          scripts/prepare-outputs.sh
+
+      - name: Build summary
+        if: success()
+        shell: bash
+        run: scripts/write-summary.sh
+
+      - name: Publish GitHub Release
+        if: ${{ success() && inputs.create_release }}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            ${{ env.IMG_PATH }}
+            ${{ env.CHECKSUMS_PATH }}
+            ${{ env.ZIP_PATH }}
+          fail_on_unmatched_files: false
+          name: ${{ inputs.build_label }}-${{ inputs.device_name }}-${{ github.run_id }}
+          tag_name: ${{ inputs.build_flavor }}-${{ inputs.device_name }}-${{ github.run_id }}
+          body: |
+            Recovery: ${{ inputs.build_label }}
+            Manifest: ${{ inputs.manifest_branch }}
+            Device: ${{ inputs.device_name }}
+            Target: ${{ inputs.build_target }}
+            Device tree commit: ${{ env.COMMIT_URL }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload image artifact
+        if: ${{ success() && !inputs.create_release }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.device_name }}-${{ inputs.build_target }}-img
+          path: |
+            ${{ env.IMG_PATH }}
+            ${{ env.CHECKSUMS_PATH }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload installer artifact
+        if: ${{ success() && !inputs.create_release && env.ZIP_PATH != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.device_name }}-installer-zip
+          path: ${{ env.ZIP_PATH }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Notify build complete
+        if: success()
+        shell: bash
+        env:
+          RELEASE_URL: ${{ inputs.create_release && format('https://github.com/{0}/releases/tag/{1}-{2}-{3}', github.repository, inputs.build_flavor, inputs.device_name, github.run_id) || format('https://github.com/{0}/actions/runs/{1}', github.repository, github.run_id) }}
+        run: python3 scripts/notify.py 100 7 update
