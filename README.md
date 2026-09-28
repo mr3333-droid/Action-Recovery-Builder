@@ -2,75 +2,111 @@
 
 Manual GitHub Actions builder for OrangeFox and TWRP device trees.
 
-> Builds are **manual-only** (`workflow_dispatch`). Pushing commits to this repository does not start a recovery build.
+> **No automatic recovery builds.** The user-facing workflows are `workflow_dispatch` only. Pushing commits to this repository does not start a recovery compile or consume build minutes.
 
-## Workflows
+## Architecture
 
-| Workflow | Source | Default branch | Lunch suffix |
+The repository keeps the two user-facing workflows intentionally small:
+
+| Workflow | Source | Manifest | Lunch suffix |
 | --- | --- | --- | --- |
 | `Recovery Build` | OrangeFox sync | `14.1` | `ap2a-eng` |
-| `Twrp Build` | TWRP AOSP manifest | `twrp-16.0` | `bp2a-eng` |
+| `TWRP Build` | TWRP AOSP manifest | `twrp-16.0` | `bp2a-eng` |
 
-Both workflows support `recovery`, `boot`, and `vendorboot` image targets.
+Both call `.github/workflows/_build-core.yml`, which owns the common build pipeline. Shared shell/Python helpers live under `scripts/`.
 
-## Cost / quota behavior
+This replaces the old layout where two ~18 KB workflow files carried separate copies of the same Telegram, clone, checksum, artifact, and release logic.
 
-- A workflow run now performs **one build and exits**. It no longer keeps the runner alive for hours waiting for device-tree changes.
-- Duplicate manual runs for the same workflow/device/tree branch/target share a concurrency group; a newer run cancels the older one.
-- Private artifacts are retained for **14 days** instead of 90. Public releases remain available until manually removed.
-- Failed compilations upload the captured build log for 7 days when available.
+## Security model
 
-These defaults are intentional: if the device tree changes, dispatch a new run instead of keeping a paid runner idle.
+Credentials are **Actions secrets only**. They are not accepted as plain `workflow_dispatch` inputs.
 
-## Secrets
-
-Prefer repository **Actions secrets** instead of typing credentials into workflow inputs:
+Configure these under **Settings → Secrets and variables → Actions**:
 
 | Secret | Purpose |
 | --- | --- |
-| `DT_TOKEN` | Token used only when the device tree is private |
-| `TELEGRAM_BOT_TOKEN` | Optional Telegram build notifications |
+| `DT_TOKEN` | Optional token for a private GitHub/GitLab device tree |
+| `TELEGRAM_BOT_TOKEN` | Optional Telegram bot token |
 | `TELEGRAM_CHAT_ID` | Optional Telegram destination |
 
-The old workflow inputs for these values remain as a compatibility fallback, but secrets are safer because workflow inputs become part of run metadata. GitHub masks supported secret values in logs.
+The device-tree clone helper masks `DT_TOKEN`, uses it only for the authenticated fetch, and then rewrites the cloned repository's `origin` back to the clean URL so the credential is not left in `.git/config`.
+
+GitHub-hosted Actions are pinned to immutable commit SHAs. The builder also no longer downloads a moving OrangeFox `android_build_env.sh` and executes it as root; the CI package set is maintained locally in `scripts/setup-build-env.sh`.
 
 ## Running a build
 
-Open **Actions**, choose either `Recovery Build` or `Twrp Build`, then choose **Run workflow**.
-
-Important inputs:
+Open **Actions**, choose `Recovery Build` or `TWRP Build`, and select **Run workflow**.
 
 | Input | Meaning |
 | --- | --- |
-| `device_tree_url` | GitHub/GitLab device-tree repository |
+| `device_tree_url` | HTTPS GitHub/GitLab device-tree URL |
 | `device_tree_branch` | Branch to clone |
-| `device_path` | Android source-tree destination, e.g. `device/xiaomi/zorn` |
-| `device_name` | Device codename used for the output path |
-| `makefile_name` | Lunch product name, e.g. `twrp_zorn` |
+| `device_path` | Android source destination, e.g. `device/xiaomi/zorn` |
+| `device_name` | Device codename used by the output tree |
+| `makefile_name` | Lunch product, e.g. `twrp_zorn` |
 | `build_target` | `recovery`, `boot`, or `vendorboot` |
-| `create_release` | Publish a GitHub Release or keep outputs as private Actions artifacts |
+| `create_release` | Publish a public GitHub Release instead of private Actions artifacts |
+
+A preflight validates URL, device path, names, and target before the expensive source sync starts.
+
+## Quota behavior
+
+The builder is deliberately conservative with Actions minutes:
+
+- there are no `push`, `pull_request`, `schedule`, or polling build triggers;
+- each dispatch performs one build and exits;
+- concurrent duplicate runs for the same recovery/device/tree branch/target cancel the older run;
+- failure logs are retained for 7 days;
+- private successful artifacts are retained for 14 days;
+- there is no giant Android source cache by default. Source trees are too large for a useful general-purpose Actions cache and can spend substantial time uploading/downloading stale data.
+
+Dependabot may open maintenance PRs for GitHub Actions versions, but those PRs do **not** trigger recovery builds.
+
+## Build flow
+
+The common workflow performs:
+
+1. runner disk cleanup;
+2. checkout of the tiny builder/helper repository;
+3. input validation and CI dependency setup;
+4. OrangeFox or TWRP source sync;
+5. authenticated device-tree clone when `DT_TOKEN` is configured;
+6. swap setup;
+7. `lunch` and `mka adbd <target>image`;
+8. image validation, SHA-256 generation, summary, and artifact/release publishing.
+
+The full compiler output is captured in `$RUNNER_TEMP/recovery-build.log`. On failure, that log is uploaded and the final 200 lines are also copied into the Actions job summary.
 
 ## Outputs
 
-A successful run validates that the expected image exists before publishing anything and creates a `SHA256SUMS` file. The run summary also records the device-tree commit and checksums.
+Every successful build verifies that the requested image exists and produces `SHA256SUMS`.
 
-Private mode uploads:
+For TWRP recovery builds, `recovery.img` is copied to a friendly `twrp-<version>-<device>.img` filename. OrangeFox keeps the image produced by the build system and also publishes the OrangeFox installer ZIP when one exists.
 
-- the requested image plus `SHA256SUMS`
-- the installer ZIP when one was produced
+## Telegram
 
-Release mode publishes the same build outputs through GitHub Releases.
+Telegram is optional. If both Telegram secrets are present, one dashboard message is created and edited through the build. Notification errors are warnings only and never turn a successful recovery compile into a failed job.
 
-## Reliability notes
+The notification engine lives in `scripts/notify.py`, uses Telegram HTML formatting (so underscores/branch names do not randomly break Markdown), and is shared by both builders.
 
-- OrangeFox/TWRP source, Java version, lunch suffixes, and the proven build commands are intentionally kept separate per workflow.
-- Third-party cleanup, swap, and release actions are pinned to commit SHAs so an upstream branch change cannot silently alter a build.
-- The job has a 300-minute hard timeout to stop genuinely stuck runs.
-- Telegram failures do not turn a successful recovery build into a failed build.
+## Reproducibility notes
 
-## zorn example
+The builder deliberately separates things that are known to differ between OrangeFox 14.1 and TWRP 16:
 
-For the current POCO F7 Pro / Redmi K80 recovery work, use the test device tree and its `main` branch when you are ready to spend Actions quota. Do not use Actions merely to validate YAML changes; repository commits alone do not trigger these workflows.
+- manifest/source sync method;
+- manifest branch;
+- lunch suffix;
+- output naming.
+
+Common behavior lives in the reusable workflow and helper scripts. Do not copy the core workflow back into both frontends.
+
+The Android build environment is installed from a repository-controlled package list. If upstream requirements change, update that script in a normal reviewed commit rather than silently executing a new remote root script.
+
+## zorn
+
+For the POCO F7 Pro / Redmi K80 (`zorn`) recovery work, point `Recovery Build` at the current test device tree when Actions quota is available.
+
+Maintenance commits to this builder are safe to make while quota is exhausted because they do not trigger builds.
 
 ## Credits
 
