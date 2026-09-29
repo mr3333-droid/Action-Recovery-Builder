@@ -67,7 +67,7 @@ jobs:
       DT_TOKEN: ${{ secrets.DT_TOKEN }}
       TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      BUILD_WORKSPACE: ${{ runner.temp }}/recovery-workspace
+      BUILD_WORKSPACE: ${{ github.workspace }}/.recovery-workspace
 
     steps:
       - name: Reclaim runner disk space
