@@ -141,14 +141,16 @@ jobs:
           lunch "${MAKEFILE_NAME}-${LUNCH_SUFFIX}"
           mka adbd "${BUILD_TARGET}image" -j"$(nproc --all)" 2>&1 | tee "$RUNNER_TEMP/recovery-build.log"
 
-      - name: Upload build failure log
+      - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ inputs.device_name }}-${{ inputs.build_target }}-failure-log
-          path: ${{ runner.temp }}/recovery-build.log
+          name: ${{ inputs.device_name }}-${{ inputs.build_target }}-failure-diagnostics
+          path: |
+            ${{ runner.temp }}/recovery-sync.log
+            ${{ runner.temp }}/recovery-build.log
           retention-days: 7
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
       - name: Add failure tail to summary
         if: failure()
@@ -157,10 +159,12 @@ jobs:
           {
             echo "### Build failure"
             echo '~~~text'
-            if [ -f "$RUNNER_TEMP/recovery-build.log" ]; then
+            if [ -s "$RUNNER_TEMP/recovery-build.log" ]; then
               tail -n 200 "$RUNNER_TEMP/recovery-build.log"
+            elif [ -s "$RUNNER_TEMP/recovery-sync.log" ]; then
+              tail -n 200 "$RUNNER_TEMP/recovery-sync.log"
             else
-              echo "Compilation log was not created; inspect the failed setup/sync step above."
+              echo "No sync/build log was created; inspect the failed validation/setup step above."
             fi
             echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
