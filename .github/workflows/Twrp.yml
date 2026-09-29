@@ -63,4 +63,7 @@ jobs:
       makefile_name: ${{ github.event.inputs.makefile_name }}
       build_target: ${{ github.event.inputs.build_target }}
       create_release: ${{ fromJSON(github.event.inputs.create_release) }}
-    secrets: inherit
+    secrets:
+      DT_TOKEN: ${{ secrets.DT_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

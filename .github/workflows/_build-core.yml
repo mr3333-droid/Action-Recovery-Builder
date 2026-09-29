@@ -39,6 +39,16 @@ on:
       create_release:
         required: true
         type: boolean
+    secrets:
+      DT_TOKEN:
+        description: "Read-only token for a private device-tree repository"
+        required: false
+      TELEGRAM_BOT_TOKEN:
+        description: "Telegram Bot API token"
+        required: false
+      TELEGRAM_CHAT_ID:
+        description: "Telegram chat/channel ID or public @channel username"
+        required: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.build_flavor }}-${{ inputs.device_name }}-${{ inputs.device_tree_branch }}-${{ inputs.build_target }}

@@ -25,9 +25,9 @@ Configure these under **Settings → Secrets and variables → Actions**:
 
 | Secret | Purpose |
 | --- | --- |
-| `DT_TOKEN` | Optional token for a private GitHub/GitLab device tree |
-| `TELEGRAM_BOT_TOKEN` | Optional Telegram bot token |
-| `TELEGRAM_CHAT_ID` | Optional Telegram destination |
+| `DT_TOKEN` | Optional read-only token for a private GitHub/GitLab device tree |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token from BotFather |
+| `TELEGRAM_CHAT_ID` | Telegram destination: numeric chat/channel ID (for example `-100...`) or a public `@channelusername` |
 
 The device-tree clone helper masks `DT_TOKEN`, uses it only for the authenticated fetch, and then rewrites the cloned repository's `origin` back to the clean URL so the credential is not left in `.git/config`.
 
@@ -86,6 +86,11 @@ For TWRP recovery builds, `recovery.img` is copied to a friendly `twrp-<version>
 ## Telegram
 
 Telegram is optional. If both Telegram secrets are present, one dashboard message is created and edited through the build. Notification errors are warnings only and never turn a successful recovery compile into a failed job.
+
+For a channel, add the bot to the channel as an administrator with permission to post messages. Use `@channelusername` for a public channel, or the numeric `-100...` channel ID for a private channel. Never put the bot token in a workflow input, repository file, commit, or device-tree URL.
+
+For a private GitHub device tree, prefer a fine-grained personal access token scoped only to that repository with **Contents: Read-only** access. Store it as `DT_TOKEN`. A token is only injected into the authenticated clone URL in memory; the clone helper masks it and immediately restores the clean remote URL afterwards.
+
 
 The notification engine lives in `scripts/notify.py`, uses Telegram HTML formatting (so underscores/branch names do not randomly break Markdown), and is shared by both builders.
 
