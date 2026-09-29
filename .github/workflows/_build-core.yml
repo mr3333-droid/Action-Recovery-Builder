@@ -100,6 +100,10 @@ jobs:
         shell: bash
         run: scripts/validate-inputs.sh
 
+      - name: Preflight device tree
+        shell: bash
+        run: scripts/preflight-device-tree.sh
+
       - name: Prepare build environment
         shell: bash
         run: |
@@ -125,6 +129,15 @@ jobs:
           python3 scripts/notify.py 45 3 update
           scripts/clone-device-tree.sh
 
+      - name: Preflight recovery configuration
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$SOURCE_ROOT"
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          lunch "${MAKEFILE_NAME}-${LUNCH_SUFFIX}" 2>&1 | tee "$RUNNER_TEMP/recovery-config.log"
+
       - name: Configure swap
         uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
         with:
@@ -148,6 +161,7 @@ jobs:
           name: ${{ inputs.device_name }}-${{ inputs.build_target }}-failure-diagnostics
           path: |
             ${{ runner.temp }}/recovery-sync.log
+            ${{ runner.temp }}/recovery-config.log
             ${{ runner.temp }}/recovery-build.log
           retention-days: 7
           if-no-files-found: warn
@@ -161,10 +175,12 @@ jobs:
             echo '~~~text'
             if [ -s "$RUNNER_TEMP/recovery-build.log" ]; then
               tail -n 200 "$RUNNER_TEMP/recovery-build.log"
+            elif [ -s "$RUNNER_TEMP/recovery-config.log" ]; then
+              tail -n 200 "$RUNNER_TEMP/recovery-config.log"
             elif [ -s "$RUNNER_TEMP/recovery-sync.log" ]; then
               tail -n 200 "$RUNNER_TEMP/recovery-sync.log"
             else
-              echo "No sync/build log was created; inspect the failed validation/setup step above."
+              echo "No sync/config/build log was created; inspect the failed validation/setup step above."
             fi
             echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
