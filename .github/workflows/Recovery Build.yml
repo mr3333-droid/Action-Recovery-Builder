@@ -56,11 +56,11 @@ jobs:
       manifest_url: https://gitlab.com/OrangeFox/sync.git
       manifest_branch: "14.1"
       lunch_suffix: ap2a-eng
-      device_tree_url: ${{ inputs.device_tree_url }}
-      device_tree_branch: ${{ inputs.device_tree_branch }}
-      device_path: ${{ inputs.device_path }}
-      device_name: ${{ inputs.device_name }}
-      makefile_name: ${{ inputs.makefile_name }}
-      build_target: ${{ inputs.build_target }}
-      create_release: ${{ inputs.create_release }}
+      device_tree_url: ${{ github.event.inputs.device_tree_url }}
+      device_tree_branch: ${{ github.event.inputs.device_tree_branch }}
+      device_path: ${{ github.event.inputs.device_path }}
+      device_name: ${{ github.event.inputs.device_name }}
+      makefile_name: ${{ github.event.inputs.makefile_name }}
+      build_target: ${{ github.event.inputs.build_target }}
+      create_release: ${{ fromJSON(github.event.inputs.create_release) }}
     secrets: inherit
